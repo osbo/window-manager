@@ -207,9 +207,7 @@ function obj:setupWindowWatcher()
             end
         end)
 
-        if obj.current_space ~= space_id then
-            obj:refreshTree()
-        end
+        obj:refreshTree()
         
         if not success then
             print("Error in windowFocused handler: " .. tostring(err))
@@ -229,6 +227,20 @@ function obj:setupWindowWatcher()
         if not obj._eventListenersActive then return end
         if obj:isWindowManageable(window) then
             obj:windowMovedHandler(window)
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowInCurrentSpace, function(window)
+        if not obj._eventListenersActive then return end
+        if obj:isWindowManageable(window) then
+            obj:refreshTree()
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowNotInCurrentSpace, function(window)
+        if not obj._eventListenersActive then return end
+        if obj:isWindowManageable(window) then
+            obj:refreshTree()
         end
     end)
 end
@@ -340,11 +352,7 @@ end
 ---
 function obj:windowMovedHandler(window)
     print("Window moved: " .. window:title())
-
-    space_id = hs.spaces.focusedSpace()
-    if obj.current_space ~= space_id then
-        obj:refreshTree()
-    end
+    obj:refreshTree()
 end
 
 ---
@@ -723,7 +731,7 @@ function obj:refreshTree()
     print("Current space: " .. current_space)
 
     tree = obj:getTreeForSpace(current_space)
-    print("Tree: " .. hs.inspect(tree))
+    -- print("Tree: " .. hs.inspect(tree))
 
     windows = hs.window.allWindows()
     local focused_screen_id = hs.screen.mainScreen():id()
@@ -745,6 +753,10 @@ function obj:refreshTree()
             print("Removing stale window: " .. (window:title() or "Invalid"))
             obj:closeWindow(window, tree)
         end
+    end
+
+    for space_id, tree in pairs(obj.trees) do
+        obj:applyLayout(tree.root)
     end
 end
 

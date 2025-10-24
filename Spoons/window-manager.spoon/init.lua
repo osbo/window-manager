@@ -57,7 +57,7 @@ function Node:findNode(window)
     end
 end
 
-obj.trees = {} -- Array: [space_id][screen_id] = { root = node, selected = node }
+obj.trees = {} -- Array: [space_id][screen_id] = { root = node, selected = node, focused_window = window }
 
 -- Initialize the spoon
 function obj:init()
@@ -66,8 +66,9 @@ end
 
 -- Start the spoon
 function obj:start()
-     self:setupWindowWatcher()
-     self:initializeTree()
+    hs.window.animationDuration = 0.0
+    self:setupWindowWatcher()
+    self:initializeTree()
     
     -- NEW: Watch for space changes
     self.spaceWatcher = hs.spaces.watcher.new(function()
@@ -139,19 +140,22 @@ function obj:setupWindowWatcher()
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowFocused, function(window)
-        -- FIX: Add filtering
-        if not obj:isWindowManageable(window) then return end
-        
         local space_id = hs.spaces.focusedSpace()
         local screen_id = window:screen():id()
         if not space_id or not screen_id then return end
         
         local tree = obj:getTreeForSpaceScreen(space_id, screen_id)
-        if not tree or not tree.root then return end
+        if not tree then return end
         
-        local foundNode = tree.root:findNode(window)
-        if foundNode then
-            tree.selected = foundNode
+        -- Always track the focused window, even if not manageable
+        tree.focused_window = window
+        
+        -- Only update selected node if the window is manageable
+        if obj:isWindowManageable(window) and tree.root then
+            local foundNode = tree.root:findNode(window)
+            if foundNode then
+                tree.selected = foundNode
+            end
         end
     end)
 
@@ -215,7 +219,8 @@ function obj:getTreeForSpaceScreen(space_id, screen_id)
         )
         obj.trees[space_id][screen_id] = {
             root = new_root,
-            selected = new_root
+            selected = new_root,
+            focused_window = nil
         }
     end
     
@@ -237,21 +242,46 @@ end
 ---
 function obj:onSpaceChanged()
     print("Space changed.")
-    local tree = obj:getCurrentTree()
+    local space_id = hs.spaces.focusedSpace()
+    local screen_id = hs.screen.mainScreen():id()
     
-    -- FIX: Check for #windows > 0 and valid selected index
+    print("New space: " .. space_id .. ", main screen: " .. screen_id)
+    
+    -- Get the tree for the main screen in the new space
+    local tree = obj:getTreeForSpaceScreen(space_id, screen_id)
+    
+    -- First, try to focus the tracked focused window (even if not manageable)
+    if tree.focused_window then
+        -- Check if window is still valid by trying to get its title
+        local success, title = pcall(function() return tree.focused_window:title() end)
+        if success and title then
+            print("Focusing tracked window: " .. title)
+            tree.focused_window:focus()
+            return
+        else
+            -- Window is no longer valid, clear it
+            tree.focused_window = nil
+        end
+    end
+    
+    -- Fallback: Focus the selected window if available
     if tree.selected and tree.selected.leaf and #tree.selected.windows > 0 then
         if tree.selected.selected < 1 or tree.selected.selected > #tree.selected.windows then
             tree.selected.selected = 1 -- Reset index if out of bounds
         end
+        print("Focusing selected window: " .. tree.selected.windows[tree.selected.selected]:title())
         tree.selected.windows[tree.selected.selected]:focus()
     elseif tree.root and tree.root.leaf and #tree.root.windows > 0 then
         if tree.root.selected < 1 or tree.root.selected > #tree.root.windows then
             tree.root.selected = 1 -- Reset index
         end
+        print("Focusing root window: " .. tree.root.windows[tree.root.selected]:title())
         tree.root.windows[tree.root.selected]:focus()
+    else
+        print("No windows to focus in this space")
     end
 end
+
 
 
 ---
@@ -318,6 +348,12 @@ function obj:addNode(window)
     local screen_id = window:screen():id()
     if not space_id or not screen_id then
         print("No focused space or screen, ignoring: " .. window:title())
+        return
+    end
+    
+    -- Only manage windows in the current space
+    if space_id ~= hs.spaces.focusedSpace() then
+        print("Window " .. window:title() .. " not in current space, ignoring.")
         return
     end
     

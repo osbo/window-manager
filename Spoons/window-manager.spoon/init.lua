@@ -243,6 +243,19 @@ function obj:setupWindowWatcher()
             obj:refreshTree()
         end
     end)
+
+    -- Handle window maximization - clear focus tracking when window becomes maximized
+    self.windowWatcher:subscribe(hs.window.filter.windowFullscreened, function(window)
+        if not obj._eventListenersActive then return end
+        print("Window maximized: " .. window:title())
+        -- Clear focus tracking for all spaces since maximized windows create their own space
+        for space_id, tree in pairs(obj.trees) do
+            if tree.focused_window and tree.focused_window:id() == window:id() then
+                tree.focused_window = nil
+                print("Cleared focus tracking for maximized window")
+            end
+        end
+    end)
 end
 
 ---
@@ -370,6 +383,20 @@ function obj:onSpaceChanged()
     
     print("New space: " .. space_id .. ", main screen: " .. screen_id)
 
+    -- Check if this is a maximized window's space (no regular windows to manage)
+    local all_windows = hs.window.allWindows()
+    local manageable_count = 0
+    for _, window in ipairs(all_windows) do
+        if obj:isWindowManageable(window) then
+            manageable_count = manageable_count + 1
+        end
+    end
+    
+    if manageable_count == 0 then
+        print("This appears to be a maximized window's space - no focus management needed")
+        return
+    end
+
     local tree = obj:getTreeForSpace(space_id)
     
     -- First, try to focus the tracked focused window (even if not manageable)
@@ -377,9 +404,23 @@ function obj:onSpaceChanged()
         -- Check if window is still valid by trying to get its title
         local success, title = pcall(function() return tree.focused_window:title() end)
         if success and title then
-            print("Focusing tracked window: " .. title)
-            tree.focused_window:focus()
-            return
+            -- Check if window is actually in current space by checking if it's in allWindows and on main screen
+            local window_in_current_space = false
+            for _, window in ipairs(all_windows) do
+                if window:id() == tree.focused_window:id() and window:screen():id() == screen_id then
+                    window_in_current_space = true
+                    break
+                end
+            end
+            
+            if window_in_current_space then
+                print("Focusing tracked window: " .. title)
+                tree.focused_window:focus()
+                return
+            else
+                print("Tracked window is not in current space, clearing focus")
+                tree.focused_window = nil
+            end
         else
             -- Window is no longer valid, clear it
             tree.focused_window = nil
@@ -723,7 +764,13 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
 end
 
 function obj:refreshTree()
-
+    -- Prevent recursive calls
+    if obj._refreshing then
+        print("Already refreshing, skipping...")
+        return
+    end
+    
+    obj._refreshing = true
     print("Refreshing tree")
 
     current_space = hs.spaces.focusedSpace()
@@ -758,6 +805,9 @@ function obj:refreshTree()
     for space_id, tree in pairs(obj.trees) do
         obj:applyLayout(tree.root)
     end
+    
+    -- Clear the refreshing flag
+    obj._refreshing = false
 end
 
 return obj

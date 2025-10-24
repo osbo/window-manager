@@ -58,9 +58,8 @@ function Node:findNode(window)
     end
 end
 
-    obj.trees = {} -- Array: [space_id][screen_id] = { root = node, selected = node, focused_window = window }
+    obj.trees = {} -- Array: [space_id] = { root = node, selected = node, focused_window = window }
     obj._eventListenersActive = true -- Flag to control event listener activity
-    -- DELETED: obj._spaceMapping = {} -- This is no longer needed
 
 -- Initialize the spoon
 function obj:init()
@@ -75,6 +74,7 @@ function obj:start()
     
     -- NEW: Watch for space changes
     self.spaceWatcher = hs.spaces.watcher.new(function()
+        if not obj._eventListenersActive then return end
         obj:onSpaceChanged()
     end)
     self.spaceWatcher:start()
@@ -151,7 +151,7 @@ function obj:setupWindowWatcher()
                 local screen = window:screen()
                 if not screen then return end -- No screen
                 local screen_id = screen:id()
-                obj:addNode(window, space_id, screen_id)
+                obj:addNode(window, space_id)
             end
         end)
         
@@ -171,7 +171,7 @@ function obj:setupWindowWatcher()
             local screen_id = screen:id()
             local space_id = hs.spaces.focusedSpace()
             
-            local tree = obj:getTreeForSpaceScreen(space_id, screen_id)
+            local tree = obj:getTreeForSpace(space_id)
             if not tree then return end
             
             -- Always track the focused window, even if not manageable
@@ -200,70 +200,32 @@ function obj:setupWindowWatcher()
 
     -- FIX: All move events now call the same robust handler
     self.windowWatcher:subscribe(hs.window.filter.windowMoved, function(window)
+        -- print("Spaces: " .. hs.inspect(hs.spaces.allSpaces())) -- all spaces
         if not obj._eventListenersActive then return end
         if obj:isWindowManageable(window) then
-            obj:onWindowMoved(window)
-        end
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowInCurrentSpace, function(window)
-        if not obj._eventListenersActive then return end
-        if obj:isWindowManageable(window) then
-            obj:onWindowMoved(window)
-        end
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowNotInCurrentSpace, function(window)
-        if not obj._eventListenersActive then return end
-        if obj:isWindowManageable(window) then
-            obj:onWindowMoved(window)
+            obj:windowMovedHandler(window)
         end
     end)
 end
 
 ---
---- NEW: Get or create the tree for a specific space and screen
+--- NEW: Get or create the tree for a specific space
 --- @param space_id (string) The space ID
---- @param screen_id (string) The screen ID
 --- @return (table) The tree object { root, selected }
 ---
-function obj:getTreeForSpaceScreen(space_id, screen_id)
+function obj:getTreeForSpace(space_id)
     if not space_id then
-        print("Error: getTreeForSpaceScreen called with nil space_id")
+        print("Error: getTreeForSpace called with nil space_id")
         space_id = hs.spaces.focusedSpace()
     end
 
-    if not screen_id then
-        print("Error: getTreeForSpaceScreen called with nil screen_id")
-        local mainScreen = hs.screen.mainScreen()
-        if not mainScreen then return nil end -- No screens
-        screen_id = mainScreen:id()
-    end
-
-    -- DELETED: updateSpaceMapping() call removed.
-
     if not obj.trees[space_id] then
-        obj.trees[space_id] = {}
-    end
-
-    if not obj.trees[space_id][screen_id] then
-        -- This is the first time we're seeing this space/screen combination. Create a new tree.
-        print("Creating new tree for space: " .. space_id .. ", screen: " .. screen_id)
+        -- This is the first time we're seeing this space. Create a new tree.
+        print("Creating new tree for space: " .. space_id)
         
-        -- Get the screen object to get its frame
-        local screen = nil
-        for _, s in ipairs(hs.screen.allScreens()) do
-            if s:id() == screen_id then
-                screen = s
-                break
-            end
-        end
-        
-        if not screen then
-            print("Screen " .. screen_id .. " not found, using main screen")
-            screen = hs.screen.mainScreen()
-            if not screen then return nil end -- Headless system?
-        end
+        -- Get the main screen for the frame
+        local screen = hs.screen.mainScreen()
+        if not screen then return nil end -- No screens
         
         local frame = screen:frame()
         local new_root = Node:new(
@@ -279,71 +241,70 @@ function obj:getTreeForSpaceScreen(space_id, screen_id)
             nil, -- no child1
             nil -- no child2
         )
-        obj.trees[space_id][screen_id] = {
+        obj.trees[space_id] = {
             root = new_root,
             selected = new_root,
             focused_window = nil
         }
     end
     
-    return obj.trees[space_id][screen_id]
+    return obj.trees[space_id]
 end
 
 ---
---- NEW: Get tree for current space and screen
+--- NEW: Get tree for current space
+--- @return (string) space_id
 --- @return (table) The tree object { root, selected }
 ---
 function obj:getCurrentTree()
     local space_id = hs.spaces.focusedSpace()
-    local screen = hs.screen.mainScreen()
-    if not screen then return nil, nil, nil end -- No screen
-    local screen_id = screen:id()
-    return space_id, screen_id, obj:getTreeForSpaceScreen(space_id, screen_id)
+    return space_id, obj:getTreeForSpace(space_id)
 end
 
 function obj:getTreeForWindow(window)
-    if not window then return nil, nil, nil end
+    if not window then return nil, nil end
     
     -- Loop through all trees
-    for space_id, screens in pairs(obj.trees) do
-        for screen_id, tree in pairs(screens) do
-            if tree and tree.root then
-                -- FIX: Pass window object, findNode will compare ID
-                if tree.root:findNode(window) then
-                    return space_id, screen_id, tree
-                end
+    for space_id, tree in pairs(obj.trees) do
+        if tree and tree.root then
+            -- FIX: Pass window object, findNode will compare ID
+            if tree.root:findNode(window) then
+                return space_id, tree
             end
         end
     end
     
-    return nil, nil, nil
+    return nil, nil
 end
 
--- Helper function to get window spaces safely
-function obj:getWindowSpaces(window)
+-- Helper function to get window space safely
+function obj:getWindowSpace(window)
     if not window then return nil end
     
-    -- Try to get spaces, with error handling
-    local success, spaces = pcall(function()
-        return window:spaces()
-    end)
+    -- Get the screen this window is on
+    local screen = window:screen()
+    if not screen then return hs.spaces.focusedSpace() end
     
-    if success and spaces and #spaces > 0 then
-        return spaces
+    local screen_uuid = screen:getUUID()
+    
+    -- Get all spaces for this screen
+    local all_spaces = hs.spaces.allSpaces()
+    local screen_spaces = all_spaces[screen_uuid]
+    if not screen_spaces then return hs.spaces.focusedSpace() end
+    
+    -- Get all windows for each space on this screen and check if our window is in any of them
+    for _, space_id in ipairs(screen_spaces) do
+        local space_windows = hs.spaces.windowsForSpace(space_id)
+        for _, space_window_id in ipairs(space_windows) do
+            if space_window_id == window:id() then
+                return space_id
+            end
+        end
     end
     
     -- Fallback: assume window is in current space
-    return {hs.spaces.focusedSpace()}
+    return hs.spaces.focusedSpace()
 end
-
---- DELETED: This function is slow, fragile, and replaced by window:spaces()
--- function obj:getWindowSpace(window) ... end
-
---- DELETED: This function is slow and fragile
--- function obj:updateSpaceMapping() ... end
-
---- DELETED: This function is no longer needed
--- function obj:getCurrentSpaceId() ... end
 
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
@@ -381,19 +342,18 @@ end
 ---
 --- REWRITTEN: Handles all window movement and space invalidation
 ---
-function obj:onWindowMoved(window)
+function obj:windowMovedHandler(window)
     obj._eventListenersActive = false
-    -- print("Event listeners inactive - onWindowMoved")
+    -- print("Event listeners inactive - windowMovedHandler")
     
     -- 1. Find the window's OLD tree
-    local oldSpaceId, oldScreenId, oldTree = obj:getTreeForWindow(window)
+    local oldSpaceId, oldTree = obj:getTreeForWindow(window)
     
-    -- 2. Get the window's NEW space and screen
+    -- 2. Get the window's NEW space
     -- FIX: Use helper function for safe space detection
-    local newSpaces = obj:getWindowSpaces(window)
-    local newScreen = window:screen()
+    local newSpaceId = obj:getWindowSpace(window)
 
-    if not newSpaces or #newSpaces == 0 or not newScreen then
+    if not newSpaceId then
         -- Window is likely moving to a fullscreen app or mission control
         -- print("Window moved to an invalid location (fullscreen?), re-enabling listeners.")
         
@@ -409,14 +369,10 @@ function obj:onWindowMoved(window)
         return
     end
     
-    local newSpaceId = newSpaces[1]
-    local newScreenId = newScreen:id()
-    
-    -- 3. Check if the window actually moved to a new tree
-    if newSpaceId ~= oldSpaceId or newScreenId ~= oldScreenId then
+    -- 3. Check if the window actually moved to a new space
+    if newSpaceId ~= oldSpaceId then
         local oldSpaceStr = oldSpaceId and tostring(oldSpaceId) or "nil"
-        local oldScreenStr = oldScreenId and tostring(oldScreenId) or "nil"
-        print("Window '"..window:title().."' moved trees: (" .. oldScreenStr .. ", " .. oldSpaceStr .. ") -> (" .. newScreenId .. ", " .. newSpaceId .. ")")
+        print("Window '"..window:title().."' moved trees: (" .. oldSpaceStr .. ") -> (" .. newSpaceId .. ")")
         
         -- 4. Move window: Remove from old tree
         if oldTree then
@@ -424,14 +380,14 @@ function obj:onWindowMoved(window)
             -- We pass the specific tree to close from
             obj:closeWindow(window, oldTree) 
             if oldTree.root then
-                obj:applyLayout(oldTree.root)
+                obj:applyLayout(oldTree.root) -- I don't think this is needed
             end
         end
         
         -- 5. Move window: Add to new tree
         -- print("Adding window to new tree...")
-        -- We pass the specific space/screen to add to
-        obj:addNode(window, newSpaceId, newScreenId) 
+        -- We pass the specific space to add to
+        obj:addNode(window, newSpaceId) 
         
         -- No need to apply layout, addNode does it.
     end
@@ -462,8 +418,8 @@ function obj:onSpaceChanged()
     
     print("New space: " .. space_id .. ", main screen: " .. screen_id)
     
-    -- Get the tree for the main screen in the new space
-    local tree = obj:getTreeForSpaceScreen(space_id, screen_id)
+    -- Get the tree for the new space
+    local tree = obj:getTreeForSpace(space_id)
     
     -- First, try to focus the tracked focused window (even if not manageable)
     if tree.focused_window then
@@ -510,61 +466,67 @@ end
 --- @param node (Node) The node to start applying layout from (usually root)
 ---
 function obj:applyLayout(node)
-  if not node then return end
+
+    obj._eventListenersActive = false
+
+    if not node then return end
 
     if node.leaf == false then -- This is an internal node
-    -- This is an internal node, calculate child frames and recurse
+        -- This is an internal node, calculate child frames and recurse
+        
+        -- Calculate child frames based on split_type and split_ratio
+        local f = {x = node.position.x, y = node.position.y, w = node.size.w, h = node.size.h}
+        local pos1, size1, pos2, size2
     
-    -- Calculate child frames based on split_type and split_ratio
-    local f = {x = node.position.x, y = node.position.y, w = node.size.w, h = node.size.h}
-    local pos1, size1, pos2, size2
+        if node.split_type == true then -- horizontal
+            pos1 = {x = f.x, y = f.y}
+            size1 = {w = f.w * node.split_ratio, h = f.h}
+            pos2 = {x = f.x + f.w * node.split_ratio, y = f.y}
+            size2 = {w = f.w * (1.0 - node.split_ratio), h = f.h}
+        else -- vertical
+            pos1 = {x = f.x, y = f.y}
+            size1 = {w = f.w, h = f.h * node.split_ratio}
+            pos2 = {x = f.x, y = f.y + f.h * node.split_ratio}
+            size2 = {w = f.w, h = f.h * (1.0 - node.split_ratio)}
+        end
+        
+        -- Update children's frames
+        if node.child1 then
+            node.child1.position = pos1
+            node.child1.size = size1
+            obj:applyLayout(node.child1)
+        end
+        if node.child2 then
+            node.child2.position = pos2
+            node.child2.size = size2
+            obj:applyLayout(node.child2)
+        end
+    
+    else
+        -- This is a leaf node, apply our frame to all windows in our stack
+        local frame = {
+            x = node.position.x,
+            y = node.position.y,
+            w = node.size.w,
+            h = node.size.h
+        }
+        for _, win in ipairs(node.windows) do
+            -- FIX: Add pcall for safety, window might be invalid
+            pcall(function() win:setFrame(frame) end)
+        end
+    end
 
-    if node.split_type == true then -- horizontal
-      pos1 = {x = f.x, y = f.y}
-      size1 = {w = f.w * node.split_ratio, h = f.h}
-      pos2 = {x = f.x + f.w * node.split_ratio, y = f.y}
-      size2 = {w = f.w * (1.0 - node.split_ratio), h = f.h}
-    else -- vertical
-      pos1 = {x = f.x, y = f.y}
-      size1 = {w = f.w, h = f.h * node.split_ratio}
-      pos2 = {x = f.x, y = f.y + f.h * node.split_ratio}
-        size2 = {w = f.w, h = f.h * (1.0 - node.split_ratio)}
-    end
-    
-    -- Update children's frames
-    if node.child1 then
-      node.child1.position = pos1
-      node.child1.size = size1
-      obj:applyLayout(node.child1)
-    end
-    if node.child2 then
-      node.child2.position = pos2
-      node.child2.size = size2
-      obj:applyLayout(node.child2)
-    end
-    
-  else
-    -- This is a leaf node, apply our frame to all windows in our stack
-    local frame = {
-      x = node.position.x,
-      y = node.position.y,
-      w = node.size.w,
-      h = node.size.h
-    }
-    for _, win in ipairs(node.windows) do
-      -- FIX: Add pcall for safety, window might be invalid
-      pcall(function() win:setFrame(frame) end)
-    end
-  end
+    hs.timer.doAfter(0.1, function()
+        obj._eventListenersActive = true
+    end)
 end
   
 ---
---- REFACTORED: Can now be told which space/screen to add to
+--- REFACTORED: Can now be told which space to add to
 --- @param window (hs.window) The window to add
 --- @param forceSpaceId (string) Optional space ID to add to
---- @param forceScreenId (string) Optional screen ID to add to
 ---
-function obj:addNode(window, forceSpaceId, forceScreenId)
+function obj:addNode(window, forceSpaceId)
     -- FIX: Add check for nil window to prevent crash
     if not window or not window:id() then
         print("addNode called with invalid window, ignoring.")
@@ -572,14 +534,13 @@ function obj:addNode(window, forceSpaceId, forceScreenId)
     end
 
     -- Check if window is already in any tree
-    local existingTreeSpaceId, existingTreeScreenId, existingTree = obj:getTreeForWindow(window)
+    local existingTreeSpaceId, existingTree = obj:getTreeForWindow(window)
     if existingTree then
         -- This can happen if events fire out of order.
         -- If it's already in the *correct* tree, we're done.
-        local targetSpaceId = forceSpaceId or (obj:getWindowSpaces(window) and obj:getWindowSpaces(window)[1])
-        local targetScreenId = forceScreenId or (window:screen() and window:screen():id())
+        local targetSpaceId = forceSpaceId or obj:getWindowSpace(window)
 
-        if existingTreeSpaceId == targetSpaceId and existingTreeScreenId == targetScreenId then
+        if existingTreeSpaceId == targetSpaceId then
             print("Window " .. window:title() .. " already in correct tree, ignoring addNode")
             return
         else
@@ -590,38 +551,20 @@ function obj:addNode(window, forceSpaceId, forceScreenId)
         end
     end
 
-    -- NEW: Use passed-in space/screen, or find them if nil
+    -- NEW: Use passed-in space, or find it if nil
     local space_id = forceSpaceId
-    local screen_id = forceScreenId
     
     if not space_id then
-        local spaces = obj:getWindowSpaces(window)
-        if spaces and #spaces > 0 then
-            space_id = spaces[1]
-        else
+        space_id = obj:getWindowSpace(window)
+        if not space_id then
             print("No space found for window, using focused space.")
             space_id = hs.spaces.focusedSpace()
         end
     end
     
-    if not screen_id then
-        local screen = window:screen()
-        if not screen then
-            print("Window has no screen, ignoring: " .. window:title())
-            return
-        end
-        screen_id = screen:id()
-    end
+    local tree = self:getTreeForSpace(space_id) -- Either existing or new tree for the space
     
-    --[[ 
-        DELETED: This check is incorrect. We DO want to be able to add
-        windows to inactive trees (e.g., during initializeTree or onWindowMoved).
-        The windowCreated watcher already filters for focusedSpace.
-    ]]
-    
-    local tree = self:getTreeForSpaceScreen(space_id, screen_id)
-    
-    print("Adding new window: " .. window:title() .. " to tree (" .. space_id .. ", " .. screen_id .. ")")
+    print("Adding new window: " .. window:title() .. " to tree (" .. space_id .. ")")
   
     -- Case 1: No root node (this is handled by getTreeForSpace,
     -- but the root might be an empty leaf).
@@ -752,7 +695,7 @@ function obj:closeWindow(window, optionalTree)
     -- If we weren't given a tree (e.g., from windowDestroyed), find it.
     if not tree then
         local space_id, screen_id
-        space_id, screen_id, tree = obj:getTreeForWindow(window)
+        space_id, tree = obj:getTreeForWindow(window)
         if not tree then
             -- print("closeWindow: Window not found in any tree.")
             return -- Window wasn't managed
@@ -855,40 +798,48 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
 end
 
 function obj:initializeTree()
-    -- Add all windows in *current* space to their respective screen trees
-    print("Initializing trees for current space...")
+    -- Initialize all spaces using proper space detection
+    print("Initializing trees for all spaces...")
 
     obj._eventListenersActive = false
     print("Event listeners inactive - initializeTree")
-    -- FIX: Use hs.spaces.focusedSpace() directly
-    local space_id = hs.spaces.focusedSpace()
     
-    -- Group windows by screen
-    local windows_by_screen = {}
-    -- FIX: Use hs.window.allWindows() and filter by space
-    for _, window in ipairs(hs.window.allWindows()) do
-        if obj:isWindowManageable(window) then
-            -- Check if window is in the current space by comparing with focused space
-            -- Since we're initializing for the current space, we can assume windows are in it
-            local screen = window:screen()
-            if screen then
-                local screen_id = screen:id()
-                if not windows_by_screen[screen_id] then
-                    windows_by_screen[screen_id] = {}
-                end
-                table.insert(windows_by_screen[screen_id], window)
-            end
-        end
-    end
-
-    -- Initialize trees for each screen
-    for screen_id, windows in pairs(windows_by_screen) do
-        print("Initializing tree for space " .. space_id .. ", screen " .. screen_id .. " with " .. #windows .. " windows")
-        local tree = self:getTreeForSpaceScreen(space_id, screen_id)
+    -- Get all spaces from all screens
+    local all_spaces = hs.spaces.allSpaces()
+    print("All spaces: " .. hs.inspect(all_spaces))
+    
+    -- Loop over each screen's spaces
+    for screen_uuid, spaces in pairs(all_spaces) do
+        print("Screen " .. screen_uuid .. " has spaces: " .. hs.inspect(spaces))
         
-        for _, window in ipairs(windows) do
-            -- FIX: Pass space_id and screen_id to addNode
-            obj:addNode(window, space_id, screen_id)
+        -- For each space on this screen
+        for _, space_id in ipairs(spaces) do
+            print("Initializing space " .. space_id)
+            
+            -- Get windows in this specific space using hs.spaces.windowsForSpace
+            local space_window_ids = hs.spaces.windowsForSpace(space_id)
+            print("  Raw window IDs in space " .. space_id .. ": " .. #space_window_ids)
+            
+            -- Convert window IDs to window objects and filter manageable ones
+            local manageable_windows = {}
+            for _, window_id in ipairs(space_window_ids) do
+                -- Find the window object by ID
+                local window = hs.window.find(window_id)
+                if window and obj:isWindowManageable(window) then
+                    table.insert(manageable_windows, window)
+                    print("    -> manageable window: " .. (window:title() or "unknown"))
+                end
+            end
+            
+            print("Space " .. space_id .. " has " .. #manageable_windows .. " manageable windows")
+            
+            -- Initialize tree for this space
+            local tree = self:getTreeForSpace(space_id)
+            
+            -- Add all windows to the tree
+            for _, window in ipairs(manageable_windows) do
+                obj:addNode(window, space_id)
+            end
         end
     end
 

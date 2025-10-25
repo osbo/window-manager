@@ -517,6 +517,12 @@ function obj:windowMovedHandler(window)
         print("Window tree not found")
     end
 
+    if lastFrame and (math.abs(currentFrame.w - lastFrame.w) > 1 or math.abs(currentFrame.h - lastFrame.h) > 1) and targetScreen == windowScreen then
+        print("Window resized: " .. window:title())
+        obj:handleWindowResize(window, currentFrame, lastFrame, targetTree)
+        return
+    end
+
     -- Use absolute mouse position (no coordinate transformation needed)
     local mousePosition = hs.mouse.absolutePosition()
 
@@ -592,6 +598,97 @@ function obj:windowMovedHandler(window)
         print("Window tree not found")
     end
 end
+
+function obj:handleWindowResize(window, currentFrame, lastFrame, tree)
+    -- Look for first internal edge in each resized direction
+    -- resize left (moved x position, delta width): currentFrame.x != lastFrame.x and currentFrame.w != lastFrame.w
+    -- resize down (did not move y position, delta height): currentFrame.y == lastFrame.y and currentFrame.h != lastFrame.h
+    -- resize up (moved y position, delta height): currentFrame.y != lastFrame.y and currentFrame.h != lastFrame.h
+    -- resize right (did not move x position, delta width): currentFrame.x == lastFrame.x and currentFrame.w != lastFrame.w
+    local deltaX = currentFrame.x - lastFrame.x
+    local deltaY = currentFrame.y - lastFrame.y
+    local deltaWidth = currentFrame.w - lastFrame.w
+    local deltaHeight = currentFrame.h - lastFrame.h
+
+    local node = tree.root:findNode(window)
+    if not node then
+        print("Node not found")
+        return
+    end
+
+    local parent = node.parent
+    if not parent then
+        print("Parent not found, node is root")
+        return
+    end
+
+    if math.abs(deltaX) > 1 and math.abs(deltaWidth) > 1 then -- resize left (moved x position, delta width)
+        -- find first internal node splitting horizontally where the previous node was child2
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == true and parentNode.child2 == childNode then
+                parentNode.split_ratio = math.max(math.min(1 - (currentFrame.w / parentNode.size.w), 1.0), 0.0)
+                print("Resizing left: " .. parentNode.split_ratio)
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+        print("Reached root node, no internal node found, not resizing left")
+    end
+
+    if math.abs(deltaY) < 1 and math.abs(deltaHeight) > 1 then -- resize down (did not move y position, delta height)
+        -- find first internal node splitting vertically where the previous node was child1
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == false and parentNode.child1 == childNode then
+                parentNode.split_ratio = math.max(math.min(currentFrame.h / parentNode.size.h, 1.0), 0.0)
+                print("Resizing down: " .. parentNode.split_ratio)
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+        print("Reached root node, no internal node found, not resizing down")
+    end
+
+    if math.abs(deltaY) > 1 and math.abs(deltaHeight) > 1 then -- resize up (moved y position, delta height)
+        -- find first internal node splitting vertically where the previous node was child2
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == false and parentNode.child2 == childNode then
+                parentNode.split_ratio = math.max(math.min(1 - (currentFrame.h / parentNode.size.h), 1.0), 0.0)
+                print("Resizing up: " .. parentNode.split_ratio)
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+        print("Reached root node, no internal node found, not resizing up")
+    end
+
+    if math.abs(deltaX) < 1 and math.abs(deltaWidth) > 1 then -- resize right (did not move x position, delta width)
+        -- find first internal node splitting horizontally where the previous node was child1
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == true and parentNode.child1 == childNode then
+                parentNode.split_ratio = math.max(math.min(currentFrame.w / parentNode.size.w, 1.0), 0.0)
+                print("Resizing right: " .. parentNode.split_ratio)
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+        print("Reached root node, no internal node found, not resizing right")
+    end
+
+    self:applyLayout(tree.root)
+end
+
 
 ---
 --- NEW: Handle space switching - simplified to just track focus, let macOS handle actual focusing

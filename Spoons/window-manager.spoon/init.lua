@@ -60,6 +60,7 @@ end
     obj.trees = {} -- Array: [space_id] = { root = node, selected = node, focused_window = window }
     obj._eventListenersActive = true -- Flag to control event listener activity
     obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
+    obj.lastMoveTime = 0 -- Track last window move time using absoluteTime for throttling
     obj.current_space = nil
 
 -- Initialize the spoon
@@ -214,9 +215,9 @@ function obj:setupWindowWatcher()
                     table.insert(foundNode.windows, window)
                 end
             end
-        end)
 
-        obj:refreshTree()
+            obj:refreshTree()
+        end)
         
         if not success then
             print("Error in windowFocused handler: " .. tostring(err))
@@ -450,6 +451,16 @@ end
 function obj:windowMovedHandler(window)
     print("Window moved: " .. window:title())
     
+    -- Throttle window move events to prevent excessive calls
+    local currentTime = hs.timer.absoluteTime()
+    if obj.lastMoveTime > 0 and (currentTime - obj.lastMoveTime) < 1000000000 then -- 1 second in nanoseconds
+        print("Throttling window move event - too soon since last move")
+        return
+    end
+    
+    -- Update lastMoveTime
+    obj.lastMoveTime = currentTime
+    
     -- Check if this is a system-initiated move by comparing positions
     local windowId = window:id()
     local currentFrame = window:frame()
@@ -570,7 +581,6 @@ function obj:windowMovedHandler(window)
     else
         print("No node at mouse position")
     end
-    obj:refreshTree()
 
     print("Target tree after move:")
     obj:printTreeWindows(targetTree.root, 0)
@@ -584,74 +594,16 @@ function obj:windowMovedHandler(window)
 end
 
 ---
---- NEW: Handle space switching
+--- NEW: Handle space switching - simplified to just track focus, let macOS handle actual focusing
 ---
 function obj:onSpaceChanged()
     print("Space changed.")
-
+    
+    -- Just refresh the tree to clean up any stale references
     obj:refreshTree()
-
-    -- FIX: Use hs.spaces.focusedSpace() directly
-    local space_id = hs.spaces.focusedSpace()
-    local mainScreen = hs.screen.mainScreen()
-    local screen_id = mainScreen:id()
     
-    print("New space: " .. space_id .. ", main screen: " .. screen_id)
-
-    -- Check if this is a maximized window's space (no regular windows to manage)
-    local all_windows = hs.window.orderedWindows()
-    local manageable_count = 0
-    for _, window in ipairs(all_windows) do
-        if obj:isWindowManageable(window) then
-            manageable_count = manageable_count + 1
-        end
-    end
-    
-    if manageable_count == 0 then
-        print("This appears to be a maximized window's space - no focus management needed")
-        return
-    end
-
-    local tree = obj:getTreeForSpace(space_id)
-    
-    -- First, try to focus the tracked focused window (even if not manageable)
-    if tree.focused_window then
-        -- Check if window is still valid by trying to get its title
-        local success, title = pcall(function() return tree.focused_window:title() end)
-        if success and title then
-            -- Check if window is actually in current space by checking if it's in orderedWindows and on main screen
-            local window_in_current_space = false
-            for _, window in ipairs(all_windows) do
-                if window:id() == tree.focused_window:id() and window:screen():id() == screen_id then
-                    window_in_current_space = true
-                    break
-                end
-            end
-            
-            if window_in_current_space then
-                print("Focusing tracked window: " .. title)
-                tree.focused_window:focus()
-                return
-            else
-                print("Tracked window is not in current space, clearing focus")
-                tree.focused_window = nil
-            end
-        else
-            -- Window is no longer valid, clear it
-            tree.focused_window = nil
-        end
-    end
-    
-    -- Fallback: Focus the selected window if available
-    if tree.selected and tree.selected.leaf and #tree.selected.windows > 0 then
-        print("Focusing selected window: " .. tree.selected.windows[#tree.selected.windows]:title())
-        tree.selected.windows[#tree.selected.windows]:focus()
-    elseif tree.root and tree.root.leaf and #tree.root.windows > 0 then
-        print("Focusing root window: " .. tree.root.windows[#tree.root.windows]:title())
-        tree.root.windows[#tree.root.windows]:focus()
-    else
-        print("No windows to focus in this space")
-    end
+    -- No manual focusing - let macOS handle it naturally
+    print("Space switched - letting macOS handle focus naturally")
 end
 
 function obj:applyLayout(node)

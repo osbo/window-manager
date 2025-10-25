@@ -12,7 +12,7 @@ obj.homepage = "https://github.com/osbo/window-manager"
 local Node = {}
 Node.__index = Node
 
-function Node:new(id, leaf, parent, selected, windows, position, size, split_type, split_ratio, child1, child2)
+function Node:new(id, leaf, parent, windows, position, size, split_type, split_ratio, child1, child2)
     local node = {
         id = id,
         leaf = leaf, -- boolean: true for leaf, false for internal
@@ -21,8 +21,7 @@ function Node:new(id, leaf, parent, selected, windows, position, size, split_typ
         size = size,
         
         -- leaf properties:
-        selected = selected,
-        windows = windows,
+        windows = windows, -- ordered table: first element is furthest back
 
         -- internal properties:
         child1 = child1,
@@ -60,6 +59,7 @@ end
 
     obj.trees = {} -- Array: [space_id] = { root = node, selected = node, focused_window = window }
     obj._eventListenersActive = true -- Flag to control event listener activity
+    obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
     obj.current_space = nil
 
 -- Initialize the spoon
@@ -172,7 +172,8 @@ function obj:setupWindowWatcher()
                 local screen = window:screen()
                 if not screen then return end -- No screen
                 local screen_id = screen:id()
-                obj:addNode(window, space_id)
+                local tree = obj:getTreeForSpace(space_id)
+                obj:addNode(window, tree)
             end
         end)
         
@@ -203,6 +204,14 @@ function obj:setupWindowWatcher()
                 local foundNode = tree.root:findNode(window)
                 if foundNode then
                     tree.selected = foundNode
+                    -- Reorder window in stack: remove from current position and append to end (front)
+                    for i, w in ipairs(foundNode.windows) do
+                        if w:id() == window:id() then
+                            table.remove(foundNode.windows, i)
+                            break
+                        end
+                    end
+                    table.insert(foundNode.windows, window)
                 end
             end
         end)
@@ -258,11 +267,6 @@ function obj:setupWindowWatcher()
     end)
 end
 
----
---- NEW: Get or create the tree for a specific space
---- @param space_id (string) The space ID
---- @return (table) The tree object { root, selected }
----
 function obj:getTreeForSpace(space_id)
     if not space_id then
         print("Error: getTreeForSpace called with nil space_id")
@@ -282,7 +286,6 @@ function obj:getTreeForSpace(space_id)
             hs.host.uuid(),  -- Generate unique UUID for node ID
             true,        -- true = leaf node
             nil,          -- no parent
-            1,
             {},           -- empty windows
             {x=frame.x, y=frame.y},
             {w=frame.w, h=frame.h},
@@ -299,6 +302,31 @@ function obj:getTreeForSpace(space_id)
     end
     
     return obj.trees[space_id]
+end
+
+---
+--- Get screen for a given space ID using hs.spaces.allSpaces()
+--- @param space_id (string) The space ID to find the screen for
+--- @return (hs.screen|nil) The screen object for the space, or nil if not found
+---
+function obj:getScreenForSpace(space_id)
+    if not space_id then return nil end
+    
+    local allSpaces = hs.spaces.allSpaces()
+    if not allSpaces then return nil end
+    
+    -- Iterate through all screens and their spaces
+    for screen_id, spaces in pairs(allSpaces) do
+        if spaces then
+            for _, space in ipairs(spaces) do
+                if space == space_id then
+                    return hs.screen.find(screen_id)
+                end
+            end
+        end
+    end
+    
+    return nil
 end
 
 ---
@@ -325,6 +353,42 @@ function obj:getTreeForWindow(window)
     end
     
     return nil, nil
+end
+
+function obj:getNodeAtPosition(x, y, tree)
+    if not tree or not tree.root then return nil end
+    
+    local function findNodeAtPosition(node)
+        if not node then return nil end
+        
+        -- Check if point is within this node's bounds
+        if x >= node.position.x and x < node.position.x + node.size.w and
+           y >= node.position.y and y < node.position.y + node.size.h then
+            
+            if node.leaf then
+                -- This is a leaf node, return it
+                return node
+            else
+                -- This is an internal node, check children
+                local child1_result = findNodeAtPosition(node.child1)
+                if child1_result then 
+                    return child1_result 
+                end
+                
+                local child2_result = findNodeAtPosition(node.child2)
+                if child2_result then 
+                    return child2_result 
+                end
+                
+                -- If no children contain the point, return this internal node
+                return node
+            end
+        end
+        
+        return nil
+    end
+    
+    return findNodeAtPosition(tree.root)
 end
 
 -- Debug helper to print all windows in a tree
@@ -365,7 +429,127 @@ end
 ---
 function obj:windowMovedHandler(window)
     print("Window moved: " .. window:title())
+    
+    -- Check if this is a system-initiated move by comparing positions
+    local windowId = window:id()
+    local currentFrame = window:frame()
+    local lastFrame = obj._lastWindowPositions[windowId]
+    
+    -- If we have a previous position and it's the same, this is likely a system move
+    if lastFrame and 
+       math.abs(currentFrame.x - lastFrame.x) < 1 and 
+       math.abs(currentFrame.y - lastFrame.y) < 1 and
+       math.abs(currentFrame.w - lastFrame.w) < 1 and 
+       math.abs(currentFrame.h - lastFrame.h) < 1 then
+        print("System move detected - ignoring")
+        return
+    end
+    
+    -- Update position tracking
+    obj._lastWindowPositions[windowId] = {
+        x = currentFrame.x,
+        y = currentFrame.y,
+        w = currentFrame.w,
+        h = currentFrame.h
+    }
+    
+
+    -- Check if left mouse button is down - pause execution if so
+    local mouseButtons = hs.mouse.getButtons()
+    if mouseButtons.left then
+        print("Left mouse button down - pausing window move handling")
+        return
+    end
+
+    local mousePosition = hs.mouse.getRelativePosition()
+    local targetScreen = hs.mouse.getCurrentScreen()
+    local targetSpace = hs.spaces.activeSpaceOnScreen(targetScreen)
+    local targetTree = obj:getTreeForSpace(targetSpace)
+
+    print("Target tree before move:")
+    obj:printTreeWindows(targetTree.root, 0)
+
+    local windowSpaceId, windowTree = obj:getTreeForWindow(window)
+    local windowScreen = obj:getScreenForSpace(windowSpaceId)
+    if windowScreen then
+        print("Window screen: " .. windowScreen:name())
+    else
+        print("Window screen not found")
+    end
+
+    if windowTree then
+        print("Window tree before move:")
+        obj:printTreeWindows(windowTree.root, 0)
+    else
+        print("Window tree not found")
+    end
+
+    local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y, targetTree)
+    
+    -- Handle case where target tree is empty (no existing windows on target screen)
+    if targetScreen ~= windowScreen then
+        print("Target screen is not window screen - simply adding window")
+        obj:closeWindow(window, windowTree)
+        obj:addNode(window, targetTree)
+    elseif node then
+        -- Store node info in local variables to prevent corruption
+        local nodeX = node.position.x
+        local nodeY = node.position.y
+        local nodeW = node.size.w
+        local nodeH = node.size.h
+        
+        obj:closeWindow(window, windowTree)
+        
+        -- Set the found node as selected in the tree
+        targetTree.selected = node
+
+        -- Calculate distances from mouse to each edge
+        local mouseX = mousePosition.x
+        local mouseY = mousePosition.y
+        
+        local distToLeft = mouseX - nodeX
+        local distToRight = (nodeX + nodeW) - mouseX
+        local distToTop = mouseY - nodeY
+        local distToBottom = (nodeY + nodeH) - mouseY
+        
+        -- Find the minimum distance to determine closest edge
+        local minDistance = math.min(distToLeft, distToRight, distToTop, distToBottom)
+        
+        -- Check if mouse is in center area (not too close to any edge)
+        local centerThreshold = math.min(nodeW, nodeH) * 0.25 -- 25% of smaller dimension
+        if minDistance > centerThreshold then
+            print("Adding to stack (center area)")
+            obj:addWindowToStack(window, targetTree)
+        elseif minDistance == distToLeft then
+            print("Splitting left (closest to left edge)")
+            obj:addNode(window, targetTree, 1, true)
+        elseif minDistance == distToRight then
+            print("Splitting right (closest to right edge)")
+            obj:addNode(window, targetTree, 2, true)
+        elseif minDistance == distToTop then
+            print("Splitting up (closest to top edge)")
+            obj:addNode(window, targetTree, 1, false)
+        elseif minDistance == distToBottom then
+            print("Splitting down (closest to bottom edge)")
+            obj:addNode(window, targetTree, 2, false)
+        else
+            print("Adding to stack (fallback)")
+            obj:addWindowToStack(window, targetTree)
+        end
+    else
+        print("No node at mouse position")
+    end
     obj:refreshTree()
+
+    print("Target tree after move:")
+    obj:printTreeWindows(targetTree.root, 0)
+
+    print("Window tree after move:")
+    if windowTree and windowTree.root then
+        obj:printTreeWindows(windowTree.root, 0)
+    else
+        print("Window tree not found")
+    end
 end
 
 ---
@@ -384,7 +568,7 @@ function obj:onSpaceChanged()
     print("New space: " .. space_id .. ", main screen: " .. screen_id)
 
     -- Check if this is a maximized window's space (no regular windows to manage)
-    local all_windows = hs.window.allWindows()
+    local all_windows = hs.window.orderedWindows()
     local manageable_count = 0
     for _, window in ipairs(all_windows) do
         if obj:isWindowManageable(window) then
@@ -404,7 +588,7 @@ function obj:onSpaceChanged()
         -- Check if window is still valid by trying to get its title
         local success, title = pcall(function() return tree.focused_window:title() end)
         if success and title then
-            -- Check if window is actually in current space by checking if it's in allWindows and on main screen
+            -- Check if window is actually in current space by checking if it's in orderedWindows and on main screen
             local window_in_current_space = false
             for _, window in ipairs(all_windows) do
                 if window:id() == tree.focused_window:id() and window:screen():id() == screen_id then
@@ -429,17 +613,11 @@ function obj:onSpaceChanged()
     
     -- Fallback: Focus the selected window if available
     if tree.selected and tree.selected.leaf and #tree.selected.windows > 0 then
-        if tree.selected.selected < 1 or tree.selected.selected > #tree.selected.windows then
-            tree.selected.selected = 1 -- Reset index if out of bounds
-        end
-        print("Focusing selected window: " .. tree.selected.windows[tree.selected.selected]:title())
-        tree.selected.windows[tree.selected.selected]:focus()
+        print("Focusing selected window: " .. tree.selected.windows[#tree.selected.windows]:title())
+        tree.selected.windows[#tree.selected.windows]:focus()
     elseif tree.root and tree.root.leaf and #tree.root.windows > 0 then
-        if tree.root.selected < 1 or tree.root.selected > #tree.root.windows then
-            tree.root.selected = 1 -- Reset index
-        end
-        print("Focusing root window: " .. tree.root.windows[tree.root.selected]:title())
-        tree.root.windows[tree.root.selected]:focus()
+        print("Focusing root window: " .. tree.root.windows[#tree.root.windows]:title())
+        tree.root.windows[#tree.root.windows]:focus()
     else
         print("No windows to focus in this space")
     end
@@ -490,151 +668,111 @@ function obj:applyLayout(node)
         }
         for _, win in ipairs(node.windows) do
             -- FIX: Add pcall for safety, window might be invalid
-            pcall(function() win:setFrame(frame) end)
+            pcall(function() 
+                win:setFrame(frame)
+                -- Update position tracking after system move
+                local windowId = win:id()
+                if windowId then
+                    obj._lastWindowPositions[windowId] = {
+                        x = frame.x,
+                        y = frame.y,
+                        w = frame.w,
+                        h = frame.h
+                    }
+                end
+            end)
         end
     end
 end
 
-function obj:addNode(window, forceSpaceId)
-    -- FIX: Add check for nil window to prevent crash
-    if not window or not window:id() then
-        print("addNode called with invalid window, ignoring.")
-        return
+function obj:addNode(window, tree, child, split_type)
+    if not window or not window:id() then return end
+    
+    -- Use current space tree if none provided
+    if not tree then
+        local space_id = hs.spaces.focusedSpace()
+        tree = self:getTreeForSpace(space_id)
     end
-
-    -- Check if window is already in the current space tree
-    local current_space = hs.spaces.focusedSpace()
-    local existingTreeSpaceId, existingTree = obj:getTreeForWindow(window)
-    if existingTree then
-        if existingTreeSpaceId == current_space then
-            print("Window " .. window:title() .. " already in current space tree, ignoring addNode")
-            return
+    
+    -- Default to child2 if no child specified
+    child = child or 2
+    
+    -- Use existing logic for split_type if not provided
+    if split_type == nil then
+        if tree.selected and tree.selected.parent then
+            split_type = not tree.selected.parent.split_type
         else
-            -- It's in a different space tree, remove it
-            print("Window " .. window:title() .. " in different space tree, removing...")
-            obj:closeWindow(window, existingTree)
+            split_type = true -- default to horizontal
         end
     end
-
-    -- Use current space
-    local space_id = current_space
     
-    local tree = self:getTreeForSpace(space_id) -- Either existing or new tree for the space
+    print("Adding window: " .. window:title() .. " to tree")
     
-    print("Adding new window: " .. window:title() .. " to tree (" .. space_id .. ")")
-  
-    -- Case 1: No root node (this is handled by getTreeForSpace,
-    -- but the root might be an empty leaf).
+    -- Case 1: Empty root
     if tree.root.leaf and #tree.root.windows == 0 then
-        print("Case 1: Adding first window to root")
         table.insert(tree.root.windows, window)
-        tree.root.selected = 1
         tree.selected = tree.root
         self:applyLayout(tree.root)
         return
     end
     
-    if tree.selected == nil then
-        print("Error: selected_node is nil. Cannot add window.")
-        -- As a fallback, let's select the root node
-        tree.selected = tree.root
-        if not tree.selected.leaf then
-            -- Root is internal, find first leaf
-            local first_leaf = tree.root
-            while first_leaf and not first_leaf.leaf do
-                first_leaf = first_leaf.child1 or first_leaf.child2
-            end
-            if first_leaf then
-                tree.selected = first_leaf
-            else
-                print("Error: Root is internal and has no leaves. Giving up.")
-                return
-            end
-        end
-    end
-
-    -- Case 2a: Selected leaf is empty.
-    if tree.selected.leaf and #tree.selected.windows == 0 then
-        print("Adding window to empty leaf: " .. tree.selected.id)
+    -- Case 2: Empty selected leaf
+    if tree.selected and tree.selected.leaf and #tree.selected.windows == 0 then
         table.insert(tree.selected.windows, window)
-        tree.selected.selected = 1
         self:applyLayout(tree.root)
         return
     end
-  
-    -- Case 2b: Split selected leaf node into internal node, select new window.
-    if not tree.selected.leaf then
-        print("Error: selected_node is an internal node. Cannot split.")
-        -- Find the first leaf *under* this internal node
-        local first_leaf = tree.selected
-        while first_leaf and not first_leaf.leaf do
-            first_leaf = first_leaf.child1 -- Default to traversing left
-        end
-        if first_leaf then
-            print("Selected node was internal, found first leaf: " .. first_leaf.id)
-            tree.selected = first_leaf
-        else
-            print("Error: Could not find any leaf under internal node.")
-            return
-        end
-    end
-
-    print("Splitting leaf node: " .. tree.selected.id)
-    local internal = tree.selected
-
-    -- 1. Create child1 (for old windows)
-    -- We pass the internal's (old leaf's) position/size as a placeholder.
-    -- applyLayout will fix it.
-    local child1 = Node:new(
-        hs.host.uuid(),  -- Generate unique UUID for node ID
-        true, -- leaf node
-        internal, -- parent
-        internal.selected, -- selected index
-        internal.windows, -- windows
-        {x=internal.position.x, y=internal.position.y}, -- position
-        {w=internal.size.w, h=internal.size.h}, -- size
-        nil, -- split type
-        nil, -- split ratio
-        nil, -- child1
-        nil -- child2
-    )
-
-    -- 2. Create child2 (for new window)
-    local child2 = Node:new(
-        hs.host.uuid(),  -- Generate unique UUID for node ID
-        true, -- leaf node
-        internal, -- parent
-        1, -- selected index
-        {window}, -- windows
-        {x=internal.position.x, y=internal.position.y}, -- position
-        {w=internal.size.w, h=internal.size.h}, -- size
-        nil, -- split type
-        nil, -- split ratio
-        nil, -- child1
-        nil -- child2
-    )
-
-    -- 3. Convert the (formerly) selected leaf into an internal node
-    if internal.parent then
-        -- Alternate split direction from parent
-        internal.split_type = not internal.parent.split_type
-    else 
-        -- No parent, this is the root node, default to horizontal
-        internal.split_type = true
-    end
-    internal.split_ratio = 0.5
-    internal.child1 = child1
-    internal.child2 = child2
-    internal.windows = nil
-    internal.selected = nil
-    internal.leaf = false
-
-    -- 4. Set the new leaf as selected
-    tree.selected = child2
     
-    -- 5. Apply the layout. This will do all the math.
+    -- Case 3: Split the selected leaf
+    local internal = tree.selected or tree.root
+    
+    -- Create child1 (existing windows)
+    local child1 = Node:new(
+        hs.host.uuid(), true, internal, internal.windows or {},
+        {x=internal.position.x, y=internal.position.y}, {w=internal.size.w, h=internal.size.h},
+        nil, nil, nil, nil
+    )
+    
+    -- Create child2 (new window)
+    local child2 = Node:new(
+        hs.host.uuid(), true, internal, {window},
+        {x=internal.position.x, y=internal.position.y}, {w=internal.size.w, h=internal.size.h},
+        nil, nil, nil, nil
+    )
+    
+    -- Convert to internal node
+    internal.split_type = split_type
+    internal.split_ratio = 0.5
+    internal.windows = nil
+    internal.leaf = false
+    
+    -- Assign children based on position parameter
+    if child == 1 then
+        -- New window goes to child1 (left/top), existing windows to child2
+        internal.child1 = child2  -- new window
+        internal.child2 = child1 -- existing windows
+        tree.selected = child2   -- select the new window
+    else
+        -- New window goes to child2 (right/bottom), existing windows to child1
+        internal.child1 = child1 -- existing windows
+        internal.child2 = child2 -- new window
+        tree.selected = child2   -- select the new window
+    end
+    
     self:applyLayout(tree.root)
-    return
+end
+
+function obj:addWindowToStack(window, tree)
+    if not window or not window:id() then return end
+    if not tree or not tree.selected then return end
+    
+    -- Add window to the selected node's windows table (at the end for frontmost)
+    table.insert(tree.selected.windows, window)
+    
+    -- Apply layout to update the display
+    self:applyLayout(tree.root)
+    
+    print("Added window to stack: " .. window:title() .. " (index " .. #tree.selected.windows .. ")")
 end
 
 function obj:closeWindow(window, optionalTree)
@@ -680,10 +818,6 @@ function obj:closeWindow(window, optionalTree)
     if #node.windows == 0 then
         obj:collapseNode(tree, node) -- NEW: Pass the tree object
     else
-        -- FIX: Adjust selected index if it's now out of bounds
-        if node.selected > #node.windows then
-            node.selected = #node.windows
-        end
         -- Reapply layout after window removal
         self:applyLayout(tree.root)
     end
@@ -698,7 +832,7 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
         local size = node.size
         -- Reset root to a clean leaf state
         tree.root = Node:new(
-            hs.host.uuid(), true, nil, 1, {},
+            hs.host.uuid(), true, nil, {},
             frame, size, nil, nil, nil, nil
         )
         tree.selected = tree.root
@@ -766,7 +900,7 @@ function obj:refreshTree()
     local tree = obj:getTreeForSpace(current_space)
     -- print("Tree: " .. hs.inspect(tree))
 
-    local windows = hs.window.allWindows()
+    local windows = hs.window.orderedWindows()
     local focused_screen_id = hs.screen.mainScreen():id()
 
     for _, window in ipairs(windows) do
@@ -775,7 +909,7 @@ function obj:refreshTree()
             if space_id and tree then
                 obj:closeWindow(window, tree)
             end
-            obj:addNode(window, current_space)
+            obj:addNode(window, tree)
         end
     end
 

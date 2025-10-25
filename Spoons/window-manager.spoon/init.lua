@@ -218,7 +218,7 @@ function obj:setupWindowWatcher()
         if not obj._eventListenersActive then return end
         -- FIX: Call the new parameterized function.
         -- It will find the window in *any* tree and remove it.
-        obj:closeWindow(window)
+        obj:closeWindow(window, nil)
     end)
 
     -- FIX: All move events now call the same robust handler
@@ -445,10 +445,6 @@ function obj:onSpaceChanged()
     end
 end
 
----
---- Applies the layout from the tree to the actual windows
---- @param node (Node) The node to start applying layout from (usually root)
----
 function obj:applyLayout(node)
 
     if not node then return end
@@ -498,12 +494,7 @@ function obj:applyLayout(node)
         end
     end
 end
-  
----
---- REFACTORED: Can now be told which space to add to
---- @param window (hs.window) The window to add
---- @param forceSpaceId (string) Optional space ID to add to
----
+
 function obj:addNode(window, forceSpaceId)
     -- FIX: Add check for nil window to prevent crash
     if not window or not window:id() then
@@ -646,11 +637,6 @@ function obj:addNode(window, forceSpaceId)
     return
 end
 
----
---- REFACTORED: Can now be told which tree to close from
---- @param window (hs.window) The window to close
---- @param optionalTree (table) An optional tree to search in first
----
 function obj:closeWindow(window, optionalTree)
     -- FIX: Add check for window and window:id()
     if not window or not window:id() then return end
@@ -773,14 +759,14 @@ function obj:refreshTree()
     obj._refreshing = true
     print("Refreshing tree")
 
-    current_space = hs.spaces.focusedSpace()
+    local current_space = hs.spaces.focusedSpace()
     obj.current_space = current_space
     print("Current space: " .. current_space)
 
-    tree = obj:getTreeForSpace(current_space)
+    local tree = obj:getTreeForSpace(current_space)
     -- print("Tree: " .. hs.inspect(tree))
 
-    windows = hs.window.allWindows()
+    local windows = hs.window.allWindows()
     local focused_screen_id = hs.screen.mainScreen():id()
 
     for _, window in ipairs(windows) do

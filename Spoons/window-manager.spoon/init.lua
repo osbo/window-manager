@@ -355,40 +355,60 @@ function obj:getTreeForWindow(window)
     return nil, nil
 end
 
-function obj:getNodeAtPosition(x, y, tree)
-    if not tree or not tree.root then return nil end
+function obj:getNodeAtPosition(x, y)
+    print("getNodeAtPosition called with: " .. x .. ", " .. y)
     
-    local function findNodeAtPosition(node)
-        if not node then return nil end
-        
-        -- Check if point is within this node's bounds
-        if x >= node.position.x and x < node.position.x + node.size.w and
-           y >= node.position.y and y < node.position.y + node.size.h then
+    -- Search through all trees
+    for space_id, tree in pairs(obj.trees) do
+        if tree and tree.root then
+            -- Quick bounds check: skip if mouse is outside the root node's bounds
+            local root = tree.root
+            print("Checking tree " .. space_id .. " bounds: " .. root.position.x .. ", " .. root.position.y .. " size: " .. root.size.w .. "x" .. root.size.h)
             
-            if node.leaf then
-                -- This is a leaf node, return it
-                return node
-            else
-                -- This is an internal node, check children
-                local child1_result = findNodeAtPosition(node.child1)
-                if child1_result then 
-                    return child1_result 
+            if x >= root.position.x and x < root.position.x + root.size.w and
+               y >= root.position.y and y < root.position.y + root.size.h then
+                print("Mouse is within tree " .. space_id .. " bounds, searching...")
+                
+                -- Mouse is within this tree's bounds, search for the specific node
+                local function findNodeAtPosition(node)
+                    if not node then return nil end
+                    
+                    -- Check if point is within this node's bounds
+                    if x >= node.position.x and x < node.position.x + node.size.w and
+                       y >= node.position.y and y < node.position.y + node.size.h then
+                        
+                        if node.leaf then
+                            -- This is a leaf node, return it
+                            return node
+                        else
+                            -- This is an internal node, check children
+                            local child1_result = findNodeAtPosition(node.child1)
+                            if child1_result then 
+                                return child1_result 
+                            end
+                            
+                            local child2_result = findNodeAtPosition(node.child2)
+                            if child2_result then 
+                                return child2_result 
+                            end
+                            
+                            -- If no children contain the point, return this internal node
+                            return node
+                        end
+                    end
+                    
+                    return nil
                 end
                 
-                local child2_result = findNodeAtPosition(node.child2)
-                if child2_result then 
-                    return child2_result 
+                local node = findNodeAtPosition(tree.root)
+                if node then
+                    return node
                 end
-                
-                -- If no children contain the point, return this internal node
-                return node
             end
         end
-        
-        return nil
     end
     
-    return findNodeAtPosition(tree.root)
+    return nil
 end
 
 -- Debug helper to print all windows in a tree
@@ -461,7 +481,6 @@ function obj:windowMovedHandler(window)
         return
     end
 
-    local mousePosition = hs.mouse.getRelativePosition()
     local targetScreen = hs.mouse.getCurrentScreen()
     local targetSpace = hs.spaces.activeSpaceOnScreen(targetScreen)
     local targetTree = obj:getTreeForSpace(targetSpace)
@@ -484,14 +503,28 @@ function obj:windowMovedHandler(window)
         print("Window tree not found")
     end
 
-    local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y, targetTree)
+    -- Use absolute mouse position (no coordinate transformation needed)
+    local mousePosition = hs.mouse.absolutePosition()
+
+    print("Mouse position: " .. mousePosition.x .. ", " .. mousePosition.y)
+    print("Number of trees: " .. (function() local count = 0; for _ in pairs(obj.trees) do count = count + 1 end; return count end)())
     
-    -- Handle case where target tree is empty (no existing windows on target screen)
-    if targetScreen ~= windowScreen then
-        print("Target screen is not window screen - simply adding window")
-        obj:closeWindow(window, windowTree)
-        obj:addNode(window, targetTree)
-    elseif node then
+    -- Debug: Print all tree bounds
+    for space_id, tree in pairs(obj.trees) do
+        if tree and tree.root then
+            local root = tree.root
+            print("Tree " .. space_id .. " bounds: " .. root.position.x .. ", " .. root.position.y .. " size: " .. root.size.w .. "x" .. root.size.h)
+        end
+    end
+
+    local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y)
+    
+    -- -- Handle case where target tree is empty (no existing windows on target screen)
+    -- if targetScreen ~= windowScreen then
+    --     print("Target screen is not window screen - simply adding window")
+    --     obj:closeWindow(window, windowTree)
+    --     obj:addNode(window, targetTree)
+    if node then
         -- Store node info in local variables to prevent corruption
         local nodeX = node.position.x
         local nodeY = node.position.y

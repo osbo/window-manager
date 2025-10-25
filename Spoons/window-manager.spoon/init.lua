@@ -278,7 +278,7 @@ function obj:getTreeForSpace(space_id)
         print("Creating new tree for space: " .. space_id)
         
         -- Get the main screen for the frame
-        local screen = hs.screen.mainScreen()
+        local screen = obj:getScreenForSpace(space_id)
         if not screen then return nil end -- No screens
         
         local frame = screen:frame()
@@ -455,7 +455,8 @@ function obj:windowMovedHandler(window)
     local currentFrame = window:frame()
     local lastFrame = obj._lastWindowPositions[windowId]
     
-    -- If we have a previous position and it's the same, this is likely a system move
+    -- Only block moves if the position hasn't changed at all (true system move)
+    -- Allow all other moves to proceed
     if lastFrame and 
        math.abs(currentFrame.x - lastFrame.x) < 1 and 
        math.abs(currentFrame.y - lastFrame.y) < 1 and
@@ -474,10 +475,12 @@ function obj:windowMovedHandler(window)
     }
     
 
-    -- Check if left mouse button is down - pause execution if so
+    -- Check if left mouse button is down - if so, this is a user drag, allow it
     local mouseButtons = hs.mouse.getButtons()
     if mouseButtons.left then
-        print("Left mouse button down - pausing window move handling")
+        print("User drag detected - allowing window to move freely")
+        -- Just refresh the tree to clean up any orphaned references
+        obj:refreshTree()
         return
     end
 
@@ -519,11 +522,6 @@ function obj:windowMovedHandler(window)
 
     local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y)
     
-    -- -- Handle case where target tree is empty (no existing windows on target screen)
-    -- if targetScreen ~= windowScreen then
-    --     print("Target screen is not window screen - simply adding window")
-    --     obj:closeWindow(window, windowTree)
-    --     obj:addNode(window, targetTree)
     if node then
         -- Store node info in local variables to prevent corruption
         local nodeX = node.position.x
@@ -549,7 +547,7 @@ function obj:windowMovedHandler(window)
         local minDistance = math.min(distToLeft, distToRight, distToTop, distToBottom)
         
         -- Check if mouse is in center area (not too close to any edge)
-        local centerThreshold = math.min(nodeW, nodeH) * 0.25 -- 25% of smaller dimension
+        local centerThreshold = math.min(nodeW, nodeH) * 0.33 -- 33% of smaller dimension
         if minDistance > centerThreshold then
             print("Adding to stack (center area)")
             obj:addWindowToStack(window, targetTree)

@@ -44,7 +44,7 @@ A high-performance Hammerspoon spoon for macOS window management using Binary Sp
 ### Node Operations
 - **Gather Nodes**: Combine multiple child nodes into a single parent node
 - **Explode Node**: Split a multi-window node into separate individual nodes
-- **Toggle Management**: Enable/disable window management without restarting
+- **Shutdown/Restart**: Completely shutdown window manager (deletes all trees) or restart it fresh
 
 ### Layout Persistence
 - **Automatic Saving**: Layouts are automatically saved on sleep and stop events

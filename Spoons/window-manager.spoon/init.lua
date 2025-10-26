@@ -62,6 +62,7 @@ end
     obj.stopWM = false -- Dedicated flag to completely stop window manager functionality
     obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
     obj.lastMoveTime = 0 -- Track last window move time using absoluteTime for throttling
+    obj.lastRefreshTime = 0 -- Track last refresh time using absoluteTime for throttling
     obj.current_space = nil
 
 -- Initialize the spoon
@@ -1007,18 +1008,26 @@ function obj:rotateRight()
     return true
 end
 
--- Toggle event listeners on/off
--- @return true if listeners are now active, false if stopped
-function obj:toggleEventListeners()
-    obj.stopWM = not obj.stopWM
+-- Shutdown/restart window manager system
+-- First press: Delete all trees, set stopWM to true
+-- Second press: Set stopWM to false and refresh tree
+function obj:toggleShutdownRestart()
     if obj.stopWM then
-        -- print("Window manager event listeners STOPPED")
-        obj._eventListenersActive = false
-    else
-        -- print("Window manager event listeners STARTED")
+        -- Currently stopped, restart the system
+        obj.stopWM = false
         obj._eventListenersActive = true
+        -- print("Window manager RESTARTED")
+        obj:refreshTree()
+        return true
+    else
+        -- Currently running, shutdown the system
+        obj.stopWM = true
+        obj._eventListenersActive = false
+        -- Delete all trees
+        obj.trees = {}
+        -- print("Window manager SHUTDOWN - all trees deleted")
+        return false
     end
-    return not obj.stopWM
 end
 
 -- Gather all windows from the parent's children and convert parent to leaf
@@ -1724,6 +1733,16 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
 end
 
 function obj:refreshTree()
+    -- Throttle refresh calls to prevent excessive calls
+    local currentTime = hs.timer.absoluteTime()
+    if obj.lastRefreshTime > 0 and (currentTime - obj.lastRefreshTime) < 1000000000 then -- 1 second in nanoseconds
+        -- print("Throttling refresh call - too soon since last refresh")
+        return
+    end
+    
+    -- Update lastRefreshTime
+    obj.lastRefreshTime = currentTime
+    
     -- Prevent recursive calls
     if obj._refreshing then
         -- print("Already refreshing, skipping...")

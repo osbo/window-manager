@@ -412,6 +412,79 @@ function obj:getNodeAtPosition(x, y)
     return nil
 end
 
+-- Find a neighbor node in a given direction, working across trees
+-- @param window The window to find a neighbor for
+-- @param direction String: "left", "right", "up", "down"
+-- @return The neighbor node if found, nil otherwise
+function obj:findNeighbor(window, direction)
+    if not window then
+        return nil
+    end
+    
+    -- Get the window's frame directly
+    local frame = window:frame()
+    
+    -- Calculate the midpoint of the appropriate edge
+    local searchX, searchY
+    local displacement = 10 -- Small displacement to search beyond the edge
+    
+    if direction == "left" then
+        -- Search to the left of the left edge
+        searchX = frame.x - displacement
+        searchY = frame.y + frame.h / 2 -- Middle of the left edge
+    elseif direction == "right" then
+        -- Search to the right of the right edge
+        searchX = frame.x + frame.w + displacement
+        searchY = frame.y + frame.h / 2 -- Middle of the right edge
+    elseif direction == "up" then
+        -- Search above the top edge
+        searchX = frame.x + frame.w / 2 -- Middle of the top edge
+        searchY = frame.y - displacement
+    elseif direction == "down" then
+        -- Search below the bottom edge
+        searchX = frame.x + frame.w / 2 -- Middle of the bottom edge
+        searchY = frame.y + frame.h + displacement
+    else
+        print("Invalid direction: " .. tostring(direction))
+        return nil
+    end
+    
+    print("Searching for neighbor in direction '" .. direction .. "' at position: " .. searchX .. ", " .. searchY)
+    
+    -- Use the existing getNodeAtPosition function
+    local neighborNode = obj:getNodeAtPosition(searchX, searchY)
+    if neighborNode then
+        print("Found neighbor: " .. (neighborNode.windows and neighborNode.windows[1] and neighborNode.windows[1]:title() or "Internal node"))
+        return neighborNode
+    end
+    
+    print("No neighbor found in direction '" .. direction .. "'")
+    return nil
+end
+
+-- Focus a neighbor window in a given direction
+-- @param direction String: "left", "right", "up", "down"
+-- @return true if neighbor was found and focused, false otherwise
+function obj:focusNeighbor(direction)
+    print("Focusing neighbor in direction '" .. direction .. "'")
+
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local neighborNode = obj:findNeighbor(currentWindow, direction)
+    if neighborNode and neighborNode.windows and neighborNode.windows[1] then
+        neighborNode.windows[1]:focus()
+        print("Focused neighbor: " .. neighborNode.windows[1]:title())
+        return true
+    else
+        print("No neighbor found in direction '" .. direction .. "'")
+        return false
+    end
+end
+
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then

@@ -43,3 +43,9 @@ end)
 hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "t", function()
     wm:reflect()
 end)
+
+-- Keybinding for toggling event listeners
+-- Hyper + Y to toggle window manager event listeners
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "y", function()
+    wm:toggleEventListeners()
+end)

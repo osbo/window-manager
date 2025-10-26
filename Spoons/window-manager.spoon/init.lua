@@ -59,6 +59,7 @@ end
 
     obj.trees = {} -- Array: [space_id] = { root = node, selected = node, focused_window = window }
     obj._eventListenersActive = true -- Flag to control event listener activity
+    obj.stopWM = false -- Dedicated flag to completely stop window manager functionality
     obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
     obj.lastMoveTime = 0 -- Track last window move time using absoluteTime for throttling
     obj.current_space = nil
@@ -184,8 +185,8 @@ function obj:setupWindowWatcher()
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowFocused, function(window)
-        if not obj._eventListenersActive then return end
-
+        if not obj._eventListenersActive or obj.stopWM then return end
+        
         -- Add error handling for window operations
         local success, err = pcall(function()
             -- FIX: Add nil checks for robustness
@@ -359,56 +360,28 @@ end
 function obj:getNodeAtPosition(x, y)
     print("getNodeAtPosition called with: " .. x .. ", " .. y)
     
-    -- Search through all trees
-    for space_id, tree in pairs(obj.trees) do
-        if tree and tree.root then
-            -- Quick bounds check: skip if mouse is outside the root node's bounds
-            local root = tree.root
-            print("Checking tree " .. space_id .. " bounds: " .. root.position.x .. ", " .. root.position.y .. " size: " .. root.size.w .. "x" .. root.size.h)
-            
-            if x >= root.position.x and x < root.position.x + root.size.w and
-               y >= root.position.y and y < root.position.y + root.size.h then
-                print("Mouse is within tree " .. space_id .. " bounds, searching...")
+    -- Get all windows and find the first one that contains the point
+    local allWindows = hs.window.orderedWindows()
+    for _, window in ipairs(allWindows) do
+        if obj:isWindowManageable(window) then
+            local frame = window:frame()
+            if x >= frame.x and x < frame.x + frame.w and
+               y >= frame.y and y < frame.y + frame.h then
+                print("Found window at position: " .. window:title())
                 
-                -- Mouse is within this tree's bounds, search for the specific node
-                local function findNodeAtPosition(node)
-                    if not node then return nil end
-                    
-                    -- Check if point is within this node's bounds
-                    if x >= node.position.x and x < node.position.x + node.size.w and
-                       y >= node.position.y and y < node.position.y + node.size.h then
-                        
-                        if node.leaf then
-                            -- This is a leaf node, return it
-                            return node
-                        else
-                            -- This is an internal node, check children
-                            local child1_result = findNodeAtPosition(node.child1)
-                            if child1_result then 
-                                return child1_result 
-                            end
-                            
-                            local child2_result = findNodeAtPosition(node.child2)
-                            if child2_result then 
-                                return child2_result 
-                            end
-                            
-                            -- If no children contain the point, return this internal node
-                            return node
-                        end
+                -- Find the node containing this window
+                local space_id, tree = obj:getTreeForWindow(window)
+                if tree and tree.root then
+                    local node = tree.root:findNode(window)
+                    if node then
+                        return node
                     end
-                    
-                    return nil
-                end
-                
-                local node = findNodeAtPosition(tree.root)
-                if node then
-                    return node
                 end
             end
         end
     end
     
+    print("No window found at position: " .. x .. ", " .. y)
     return nil
 end
 
@@ -604,6 +577,20 @@ function obj:reflectNode(node)
     if node.child2 then
         obj:reflectNode(node.child2)
     end
+end
+
+-- Toggle event listeners on/off
+-- @return true if listeners are now active, false if stopped
+function obj:toggleEventListeners()
+    obj.stopWM = not obj.stopWM
+    if obj.stopWM then
+        print("Window manager event listeners STOPPED")
+        obj._eventListenersActive = false
+    else
+        print("Window manager event listeners STARTED")
+        obj._eventListenersActive = true
+    end
+    return not obj.stopWM
 end
 
 -- Debug helper to print all windows in a tree

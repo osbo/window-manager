@@ -94,3 +94,11 @@ hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "v", function()
 end, function()
     wm:stopResize("right")
 end)
+
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "g", function()
+    wm:rotateLeft()
+end)
+
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "b", function()
+    wm:rotateRight()
+end)

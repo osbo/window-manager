@@ -549,7 +549,6 @@ function obj:resizeWindow(direction)
     -- Find the appropriate split parent
     if direction == "left" or direction == "right" then
         -- Find first horizontal split
-        local childNode = node
         local parentNode = node.parent
         while parentNode do
             if parentNode.split_type == true then
@@ -557,12 +556,10 @@ function obj:resizeWindow(direction)
                 found = true
                 break
             end
-            childNode = parentNode
             parentNode = parentNode.parent
         end
     elseif direction == "up" or direction == "down" then
         -- Find first vertical split
-        local childNode = node
         local parentNode = node.parent
         while parentNode do
             if parentNode.split_type == false then
@@ -570,7 +567,6 @@ function obj:resizeWindow(direction)
                 found = true
                 break
             end
-            childNode = parentNode
             parentNode = parentNode.parent
         end
     end
@@ -760,6 +756,192 @@ function obj:reflectNode(node)
     if node.child2 then
         obj:reflectNode(node.child2)
     end
+end
+
+function obj:rotateLeft()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root or tree.root.leaf then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+
+    print("Tree before rotate left:")
+    obj:printTreeWindows(tree.root, 0)
+    
+    local root = tree.root
+    local child1 = root.child1
+    local child2 = root.child2
+    local selected = tree.selected
+
+    if child2.leaf then 
+        print("Child2 is a leaf, can't rotate left")
+        return false
+    end
+    
+    local child2child1 = child2.child1
+    local child2child2 = child2.child2
+
+    -- Create new root node - inherits root's split properties but takes child2's content
+    local newRoot = Node:new(
+        child2.id,
+        child2.leaf,
+        nil, -- parent will be set later
+        child2.windows,
+        root.position,
+        root.size,
+        root.split_type,    -- Keep root's split type
+        root.split_ratio,   -- Keep root's split ratio
+        nil, -- child1 will be set below
+        nil  -- child2 will be set below
+    )
+
+    -- Create new child1 - inherits child2's split properties but takes root's content
+    local newChild1 = Node:new(
+        root.id,
+        root.leaf,
+        newRoot,
+        root.windows,
+        root.position,
+        root.size,
+        child2.split_type,    -- Use child2's split type
+        child2.split_ratio,   -- Use child2's split ratio
+        child1, -- original child1
+        child2child1 -- child2's first child
+    )
+
+    -- Set up the new structure
+    newRoot.child1 = newChild1
+    newRoot.child2 = child2child2
+    child2child2.parent = newRoot
+
+    -- Update child1 and child2child1 parents
+    if child1 then
+        child1.parent = newChild1
+    end
+    if child2child1 then
+        child2child1.parent = newChild1
+    end
+
+    -- Replace the root
+    tree.root = newRoot
+
+    -- Update selection
+    if selected == root then 
+        tree.selected = newRoot
+    elseif selected == child2 then
+        tree.selected = newRoot
+    elseif selected == child1 then
+        tree.selected = child2child1
+    elseif selected == child2child1 then
+        tree.selected = child1
+    elseif selected == child2child2 then
+        tree.selected = newRoot
+    end
+    
+    print("Tree after rotate left:")
+    obj:printTreeWindows(tree.root, 0)
+    
+    obj:applyLayout(tree.root)
+    return true
+end
+
+function obj:rotateRight()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root or tree.root.leaf then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+
+    print("Tree before rotate right:")
+    obj:printTreeWindows(tree.root, 0)
+    
+    local root = tree.root
+    local child1 = root.child1
+    local child2 = root.child2
+    local selected = tree.selected
+
+    if child1.leaf then 
+        print("Child1 is a leaf, can't rotate right")
+        return false
+    end
+    
+    local child1child1 = child1.child1
+    local child1child2 = child1.child2
+
+    -- Create new root node - inherits root's split properties but takes child1's content
+    local newRoot = Node:new(
+        child1.id,
+        child1.leaf,
+        nil, -- parent will be set later
+        child1.windows,
+        root.position,
+        root.size,
+        root.split_type,    -- Keep root's split type
+        root.split_ratio,   -- Keep root's split ratio
+        nil, -- child1 will be set below
+        nil  -- child2 will be set below
+    )
+
+    -- Create new child2 - inherits child1's split properties but takes root's content
+    local newChild2 = Node:new(
+        root.id,
+        root.leaf,
+        newRoot,
+        root.windows,
+        root.position,
+        root.size,
+        child1.split_type,    -- Use child1's split type
+        child1.split_ratio,   -- Use child1's split ratio
+        child1child2, -- child1's second child
+        child2 -- original child2
+    )
+
+    -- Set up the new structure
+    newRoot.child1 = child1child1
+    newRoot.child2 = newChild2
+    child1child1.parent = newRoot
+
+    -- Update child1child2 and child2 parents
+    if child1child2 then
+        child1child2.parent = newChild2
+    end
+    if child2 then
+        child2.parent = newChild2
+    end
+
+    -- Replace the root
+    tree.root = newRoot
+
+    -- Update selection
+    if selected == root then 
+        tree.selected = newRoot
+    elseif selected == child1 then
+        tree.selected = newRoot
+    elseif selected == child1child1 then
+        tree.selected = newRoot
+    elseif selected == child1child2 then
+        tree.selected = child2
+    elseif selected == child2 then
+        tree.selected = child1child2
+    end
+    
+    print("Tree after rotate right:")
+    obj:printTreeWindows(tree.root, 0)
+    
+    obj:applyLayout(tree.root)
+    return true
 end
 
 -- Toggle event listeners on/off

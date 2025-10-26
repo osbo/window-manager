@@ -203,11 +203,9 @@ function obj:setupWindowWatcher()
             -- FIX: Add filtering
             if obj:isWindowManageable(window) then
                 -- This is correct: new windows are always created on the focused space.
-                local space_id = hs.spaces.focusedSpace()
-                local screen = window:screen()
-                if not screen then return end -- No screen
-                local screen_id = screen:id()
-                local tree = obj:getTreeForSpace(space_id)
+                local current_space = hs.spaces.focusedSpace()
+                local tree = obj:getTreeForSpace(current_space)
+                if not tree then return end
                 obj:addNode(window, tree)
             end
         end)
@@ -1102,7 +1100,7 @@ end
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then
-        print(string.rep("  ", depth) .. "nil")
+        -- print(string.rep("  ", depth) .. "nil")
         return
     end
     
@@ -1118,15 +1116,15 @@ function obj:printTreeWindows(node, depth)
                 table.insert(windowTitles, "[Invalid Window]")
             end
         end
-        print(indent .. "Leaf: [" .. table.concat(windowTitles, ", ") .. "]")
+        -- print(indent .. "Leaf: [" .. table.concat(windowTitles, ", ") .. "]")
     else
-        print(indent .. "Internal (split: " .. (node.split_type and "horizontal" or "vertical") .. ")")
+        -- print(indent .. "Internal (split: " .. (node.split_type and "horizontal" or "vertical") .. ")")
         if node.child1 then
-            print(indent .. "  Child1:")
+            -- print(indent .. "  Child1:")
             obj:printTreeWindows(node.child1, depth + 2)
         end
         if node.child2 then
-            print(indent .. "  Child2:")
+            -- print(indent .. "  Child2:")
             obj:printTreeWindows(node.child2, depth + 2)
         end
     end
@@ -1879,13 +1877,13 @@ function obj:saveLayout()
     -- Encode and write to file
     local json_data = hs.json.encode(layout_to_save)
     if not json_data then
-        print("WindowManager: Failed to serialize layout.")
+        -- print("WindowManager: Failed to serialize layout.")
         return
     end
     
     local file, err = io.open(obj.save_path, "w")
     if not file then
-        print("WindowManager: Failed to open layout file for writing: " .. err)
+        -- print("WindowManager: Failed to open layout file for writing: " .. err)
         return
     end
     
@@ -1927,6 +1925,34 @@ function obj:loadLayout()
         return
     end
     
+    -- Create lookup table for windows by bundle ID before reconstruction
+    local bundleID_to_windows = {}
+    local allSpaces = hs.spaces.allSpaces()
+    for screen_id, spaces in pairs(allSpaces) do
+        if spaces then
+            for _, space_id in ipairs(spaces) do
+                local window_ids = hs.spaces.windowsForSpace(space_id)
+                if window_ids then
+                    for _, window_id in ipairs(window_ids) do
+                        local window = hs.window.get(window_id)
+                        if window then
+                            local app = window:application()
+                            if app then
+                                local bundleID = app:bundleID()
+                                if bundleID then
+                                    if not bundleID_to_windows[bundleID] then
+                                        bundleID_to_windows[bundleID] = {}
+                                    end
+                                    table.insert(bundleID_to_windows[bundleID], window)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     -- Helper function to reconstruct a node from saved data
     local function reconstructNode(node_data)
         if not node_data then return nil end
@@ -1947,9 +1973,8 @@ function obj:loadLayout()
         -- Set the metatable to give the node access to Node methods
         setmetatable(node, Node)
         
-        -- Reconstruct windows by finding them by title and bundle ID
+        -- Reconstruct windows using the lookup table
         if node_data.windows then
-            -- print("Reconstructing " .. #node_data.windows .. " windows for node")
             for _, window_info in ipairs(node_data.windows) do
                 local window = nil
                 
@@ -1957,11 +1982,6 @@ function obj:loadLayout()
                 if type(window_info) == "number" then
                     -- Old format: just window ID
                     window = hs.window.get(window_info)
-                    -- if window then
-                    --     print("  Found window by old ID: " .. window:title())
-                    -- else
-                    --     print("  Window not found for old ID: " .. window_info)
-                    -- end
                 else
                     -- New format: object with id, title, bundleID
                     -- First try to find by ID (in case it's still valid)
@@ -1969,28 +1989,12 @@ function obj:loadLayout()
                         window = hs.window.get(window_info.id)
                     end
                     
-                    -- If not found by ID, try to find by bundle ID (more reliable than title)
-                    if not window and window_info.bundleID then
-                        local all_windows = hs.window.allWindows()
-                        -- print("  Searching through " .. #all_windows .. " available windows for bundle: " .. window_info.bundleID)
-                        for _, w in ipairs(all_windows) do
-                            local w_title = w:title()
-                            local app = w:application()
-                            local w_bundleID = app and app:bundleID() or "unknown"
-                            -- print("    Checking window: '" .. w_title .. "' (Bundle: " .. w_bundleID .. ")")
-                            if w_bundleID == window_info.bundleID then
-                                window = w
-                                -- print("    MATCH FOUND by bundle ID! (Title: '" .. w_title .. "' vs saved: '" .. window_info.title .. "')")
-                                break
-                            end
-                        end
+                    -- If not found by ID, use lookup table to find by bundle ID
+                    if not window and window_info.bundleID and bundleID_to_windows[window_info.bundleID] then
+                        local candidates = bundleID_to_windows[window_info.bundleID]
+                        -- Use the first available window for this bundle ID
+                        window = candidates[1]
                     end
-                    
-                    -- if window then
-                    --     print("  Found window: " .. window:title())
-                    -- else
-                    --     print("  Window not found: " .. (window_info.title or "unknown"))
-                    -- end
                 end
                 
                 if window then
@@ -2053,6 +2057,14 @@ function obj:loadLayout()
     --     end
     -- end
     -- print("=== END LAYOUT AFTER LOADING ===")
+    
+    -- Apply layout to all loaded trees, not just the current space
+    for space_id, tree in pairs(obj.trees) do
+        if tree.root then
+            -- print("Applying layout to space " .. space_id)
+            obj:applyLayout(tree.root)
+        end
+    end
     
     -- Also refresh the current space to handle any new windows
     obj:refreshTree()

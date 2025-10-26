@@ -1101,14 +1101,20 @@ function obj:addNode(window, tree, child, split_type)
     if tree.root.leaf and #tree.root.windows == 0 then
         table.insert(tree.root.windows, window)
         tree.selected = tree.root
-        self:applyLayout(tree.root)
+        -- Only apply layout if not refreshing (to prevent recursive calls)
+        if not obj._refreshing then
+            self:applyLayout(tree.root)
+        end
         return
     end
     
     -- Case 2: Empty selected leaf
     if tree.selected and tree.selected.leaf and #tree.selected.windows == 0 then
         table.insert(tree.selected.windows, window)
-        self:applyLayout(tree.root)
+        -- Only apply layout if not refreshing (to prevent recursive calls)
+        if not obj._refreshing then
+            self:applyLayout(tree.root)
+        end
         return
     end
     
@@ -1148,7 +1154,10 @@ function obj:addNode(window, tree, child, split_type)
         tree.selected = child2   -- select the new window
     end
     
-    self:applyLayout(tree.root)
+    -- Only apply layout if not refreshing (to prevent recursive calls)
+    if not obj._refreshing then
+        self:applyLayout(tree.root)
+    end
 end
 
 function obj:addWindowToStack(window, tree)
@@ -1158,8 +1167,10 @@ function obj:addWindowToStack(window, tree)
     -- Add window to the selected node's windows table (at the end for frontmost)
     table.insert(tree.selected.windows, window)
     
-    -- Apply layout to update the display
-    self:applyLayout(tree.root)
+    -- Only apply layout if not refreshing (to prevent recursive calls)
+    if not obj._refreshing then
+        self:applyLayout(tree.root)
+    end
     
     print("Added window to stack: " .. window:title() .. " (index " .. #tree.selected.windows .. ")")
 end
@@ -1207,8 +1218,10 @@ function obj:closeWindow(window, optionalTree)
     if #node.windows == 0 then
         obj:collapseNode(tree, node) -- NEW: Pass the tree object
     else
-        -- Reapply layout after window removal
-        self:applyLayout(tree.root)
+        -- Only apply layout if not refreshing (to prevent recursive calls)
+        if not obj._refreshing then
+            self:applyLayout(tree.root)
+        end
     end
 end
 
@@ -1268,8 +1281,10 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
         tree.selected = new_selected or tree.root -- Fallback to root
     end
     
-    -- Reapply layout
-    self:applyLayout(tree.root)
+    -- Only apply layout if not refreshing (to prevent recursive calls)
+    if not obj._refreshing then
+        self:applyLayout(tree.root)
+    end
 end
 
 function obj:refreshTree()
@@ -1287,32 +1302,110 @@ function obj:refreshTree()
     print("Current space: " .. current_space)
 
     local tree = obj:getTreeForSpace(current_space)
-    -- print("Tree: " .. hs.inspect(tree))
-
-    local windows = hs.window.orderedWindows()
     local focused_screen_id = hs.screen.mainScreen():id()
-
-    for _, window in ipairs(windows) do
-        if obj:isWindowManageable(window) and window:screen():id() == focused_screen_id and not tree.root:findNode(window) then
-            local space_id, tree = obj:getTreeForWindow(window)
-            if space_id and tree then
+    
+    -- Save the list of windows on the screen as a local table
+    local windows_on_screen = {}
+    local all_windows = hs.window.orderedWindows()
+    for _, window in ipairs(all_windows) do
+        if obj:isWindowManageable(window) and window:screen():id() == focused_screen_id then
+            table.insert(windows_on_screen, window)
+        end
+    end
+    
+    -- Save the list of windows in the tree before making any changes
+    local windows_in_tree = {}
+    if tree.root then
+        windows_in_tree = tree.root:getAllLeafWindows()
+    end
+    
+    -- Create lookup tables for efficient comparison
+    local screen_windows_by_id = {}
+    for _, window in ipairs(windows_on_screen) do
+        screen_windows_by_id[window:id()] = window
+    end
+    
+    local tree_windows_by_id = {}
+    for _, window in ipairs(windows_in_tree) do
+        tree_windows_by_id[window:id()] = window
+    end
+    
+    -- Find windows to add (on screen but not in tree)
+    local windows_to_add = {}
+    for _, window in ipairs(windows_on_screen) do
+        if not tree_windows_by_id[window:id()] then
+            table.insert(windows_to_add, window)
+        end
+    end
+    
+    -- Find windows to remove (in tree but not on screen or not manageable)
+    local windows_to_remove = {}
+    for _, window in ipairs(windows_in_tree) do
+        local should_remove = false
+        
+        -- Check if window is no longer manageable
+        if not obj:isWindowManageable(window) then
+            should_remove = true
+        -- Check if window is not on the current screen
+        elseif window:screen():id() ~= focused_screen_id then
+            should_remove = true
+        -- Check if window is not in the current window list
+        elseif not screen_windows_by_id[window:id()] then
+            should_remove = true
+        end
+        
+        if should_remove then
+            table.insert(windows_to_remove, window)
+        end
+    end
+    
+    print("Windows to add: " .. #windows_to_add)
+    print("Windows to remove: " .. #windows_to_remove)
+    
+    -- Remove windows first (to avoid conflicts)
+    for _, window in ipairs(windows_to_remove) do
+        print("Removing stale window: " .. (window:title() or "Invalid"))
+        obj:closeWindow(window, tree)
+    end
+    
+    -- Add new windows
+    for _, window in ipairs(windows_to_add) do
+        print("Adding new window: " .. window:title())
+        obj:addNode(window, tree)
+    end
+    
+    -- Clean up duplicates: find windows that appear multiple times in the tree
+    if tree.root then
+        local all_tree_windows = tree.root:getAllLeafWindows()
+        local window_counts = {}
+        local duplicate_windows = {}
+        
+        -- Count occurrences of each window
+        for _, window in ipairs(all_tree_windows) do
+            local window_id = window:id()
+            if window_id then
+                window_counts[window_id] = (window_counts[window_id] or 0) + 1
+                if window_counts[window_id] > 1 then
+                    table.insert(duplicate_windows, window)
+                end
+            end
+        end
+        
+        -- Remove duplicate windows (keep only the first occurrence)
+        if #duplicate_windows > 0 then
+            print("Found " .. #duplicate_windows .. " duplicate windows, cleaning up...")
+            for _, window in ipairs(duplicate_windows) do
+                print("Removing duplicate: " .. (window:title() or "Invalid"))
                 obj:closeWindow(window, tree)
             end
-            obj:addNode(window, tree)
         end
     end
-
-    local all_windows_in_tree = tree.root:getAllLeafWindows()
-
-    for _, window in ipairs(all_windows_in_tree) do
-        if not obj:isWindowManageable(window) or window:screen():id() ~= focused_screen_id or not hs.fnutils.contains(windows, window) then
-            print("Removing stale window: " .. (window:title() or "Invalid"))
-            obj:closeWindow(window, tree)
-        end
-    end
-
+    
+    -- Apply layout only once at the end for all trees
     for space_id, tree in pairs(obj.trees) do
-        obj:applyLayout(tree.root)
+        if tree.root then
+            obj:applyLayout(tree.root)
+        end
     end
     
     -- Clear the refreshing flag

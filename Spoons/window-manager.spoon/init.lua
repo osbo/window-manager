@@ -626,64 +626,84 @@ function obj:handleWindowResize(window, currentFrame, lastFrame, tree)
         -- find first internal node splitting horizontally where the previous node was child2
         local childNode = node
         local parentNode = node.parent
+        local found = false
         while parentNode do
             if parentNode.split_type == true and parentNode.child2 == childNode then
-                parentNode.split_ratio = math.max(math.min(1 - (currentFrame.w / parentNode.size.w), 1.0), 0.0)
+                -- NEW MATH: Use position to determine splitter edge location
+                local new_child1_width = currentFrame.x - parentNode.position.x
+                parentNode.split_ratio = math.max(math.min(new_child1_width / parentNode.size.w, 1.0), 0.0)
                 print("Resizing left: " .. parentNode.split_ratio)
+                found = true
                 break
             end
             childNode = parentNode
             parentNode = parentNode.parent
         end
-        print("Reached root node, no internal node found, not resizing left")
+        if not found then
+            print("Reached root node, no internal node found, not resizing left")
+        end
     end
 
     if math.abs(deltaY) < 1 and math.abs(deltaHeight) > 1 then -- resize down (did not move y position, delta height)
         -- find first internal node splitting vertically where the previous node was child1
         local childNode = node
         local parentNode = node.parent
+        local found = false
         while parentNode do
             if parentNode.split_type == false and parentNode.child1 == childNode then
                 parentNode.split_ratio = math.max(math.min(currentFrame.h / parentNode.size.h, 1.0), 0.0)
                 print("Resizing down: " .. parentNode.split_ratio)
+                found = true
                 break
             end
             childNode = parentNode
             parentNode = parentNode.parent
         end
-        print("Reached root node, no internal node found, not resizing down")
+        if not found then
+            print("Reached root node, no internal node found, not resizing down")
+        end
     end
 
     if math.abs(deltaY) > 1 and math.abs(deltaHeight) > 1 then -- resize up (moved y position, delta height)
         -- find first internal node splitting vertically where the previous node was child2
         local childNode = node
         local parentNode = node.parent
+        local found = false
         while parentNode do
             if parentNode.split_type == false and parentNode.child2 == childNode then
-                parentNode.split_ratio = math.max(math.min(1 - (currentFrame.h / parentNode.size.h), 1.0), 0.0)
+                -- NEW MATH: Use position to determine splitter edge location
+                local new_child1_height = currentFrame.y - parentNode.position.y
+                parentNode.split_ratio = math.max(math.min(new_child1_height / parentNode.size.h, 1.0), 0.0)
                 print("Resizing up: " .. parentNode.split_ratio)
+                found = true
                 break
             end
             childNode = parentNode
             parentNode = parentNode.parent
         end
-        print("Reached root node, no internal node found, not resizing up")
+        if not found then
+            print("Reached root node, no internal node found, not resizing up")
+        end
     end
 
     if math.abs(deltaX) < 1 and math.abs(deltaWidth) > 1 then -- resize right (did not move x position, delta width)
         -- find first internal node splitting horizontally where the previous node was child1
         local childNode = node
         local parentNode = node.parent
+        local found = false
         while parentNode do
             if parentNode.split_type == true and parentNode.child1 == childNode then
                 parentNode.split_ratio = math.max(math.min(currentFrame.w / parentNode.size.w, 1.0), 0.0)
                 print("Resizing right: " .. parentNode.split_ratio)
+                found = true
                 break
             end
             childNode = parentNode
             parentNode = parentNode.parent
         end
-        print("Reached root node, no internal node found, not resizing right")
+        if not found then
+            print("Reached root node, no internal node found, not resizing right")
+        end
     end
 
     self:applyLayout(tree.root)

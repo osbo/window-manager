@@ -593,6 +593,56 @@ function obj:toggleEventListeners()
     return not obj.stopWM
 end
 
+-- Gather all windows from the parent's children and convert parent to leaf
+-- @return true if successful, false otherwise
+function obj:gatherNodes()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local node = tree.root:findNode(currentWindow)
+    if not node then
+        print("Focused window not found in tree")
+        return false
+    end
+    
+    local parent = node.parent
+    if not parent then
+        print("Focused window's node has no parent (it's the root)")
+        return false
+    end
+    
+    print("Gathering nodes from parent")
+    
+    -- Use the existing getAllLeafWindows method
+    local allWindows = parent:getAllLeafWindows()
+    
+    -- Convert parent to leaf node
+    parent.leaf = true
+    parent.windows = allWindows
+    parent.child1 = nil
+    parent.child2 = nil
+    parent.split_type = nil
+    parent.split_ratio = nil
+    
+    -- Update tree selection to the parent
+    tree.selected = parent
+    
+    -- Apply layout to update visual representation
+    obj:applyLayout(tree.root)
+    
+    print("Successfully gathered " .. #allWindows .. " windows into parent node")
+    return true
+end
+
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then

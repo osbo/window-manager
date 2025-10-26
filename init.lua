@@ -49,3 +49,9 @@ end)
 hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "y", function()
     wm:toggleEventListeners()
 end)
+
+-- Keybinding for gathering nodes
+-- Hyper + H to gather all windows from parent's children into a stack
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "h", function()
+    wm:gatherNodes()
+end)

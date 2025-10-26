@@ -196,7 +196,7 @@ function obj:setupWindowWatcher()
     self.windowWatcher = hs.window.filter.new()
 
     self.windowWatcher:subscribe(hs.window.filter.windowCreated, function(window)
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         
         -- Add error handling for window operations
         local success, err = pcall(function()
@@ -260,7 +260,7 @@ function obj:setupWindowWatcher()
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowDestroyed, function(window)
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         -- FIX: Call the new parameterized function.
         -- It will find the window in *any* tree and remove it.
         obj:closeWindow(window, nil)
@@ -269,21 +269,21 @@ function obj:setupWindowWatcher()
     -- FIX: All move events now call the same robust handler
     self.windowWatcher:subscribe(hs.window.filter.windowMoved, function(window)
         -- print("Spaces: " .. hs.inspect(hs.spaces.allSpaces())) -- all spaces
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         if obj:isWindowManageable(window) then
             obj:windowMovedHandler(window)
         end
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowInCurrentSpace, function(window)
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         if obj:isWindowManageable(window) then
             obj:refreshTree()
         end
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowNotInCurrentSpace, function(window)
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         if obj:isWindowManageable(window) then
             obj:refreshTree()
         end
@@ -291,7 +291,7 @@ function obj:setupWindowWatcher()
 
     -- Handle window maximization - clear focus tracking when window becomes maximized
     self.windowWatcher:subscribe(hs.window.filter.windowFullscreened, function(window)
-        if not obj._eventListenersActive then return end
+        if not obj._eventListenersActive or obj.stopWM then return end
         -- print("Window maximized: " .. window:title())
         -- Clear focus tracking for all spaces since maximized windows create their own space
         for space_id, tree in pairs(obj.trees) do
@@ -299,6 +299,38 @@ function obj:setupWindowWatcher()
                 tree.focused_window = nil
                 -- print("Cleared focus tracking for maximized window")
             end
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowMinimized, function(window)
+        if not obj._eventListenersActive or obj.stopWM then return end
+        if obj:isWindowManageable(window) then
+            -- print("Window minimized: " .. window:title())
+            obj:refreshTree()
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowHidden, function(window)
+        if not obj._eventListenersActive or obj.stopWM then return end
+        if obj:isWindowManageable(window) then
+            -- print("Window hidden: " .. window:title())
+            obj:refreshTree()
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowUnminimized, function(window)
+        if not obj._eventListenersActive or obj.stopWM then return end
+        if obj:isWindowManageable(window) then
+            -- print("Window unminimized: " .. window:title())
+            obj:refreshTree()
+        end
+    end)
+
+    self.windowWatcher:subscribe(hs.window.filter.windowUnhidden, function(window)
+        if not obj._eventListenersActive or obj.stopWM then return end
+        if obj:isWindowManageable(window) then
+            -- print("Window unhidden: " .. window:title())
+            obj:refreshTree()
         end
     end)
 end

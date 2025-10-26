@@ -2,10 +2,6 @@
 
 A high-performance Hammerspoon spoon for macOS window management using Binary Space Partitioning (BSP) trees. Built for rapid keyboard-only navigation and automatic tiling that works seamlessly with native macOS features.
 
-## Overview
-
-This window manager provides the fastest macOS window management experience by combining automatic BSP tiling with intelligent space management. It maintains separate tree structures for each macOS Space, enabling rapid keyboard navigation and automatic window organization without interfering with native macOS behavior.
-
 ## Key Features
 
 ### Automatic BSP Tiling
@@ -41,8 +37,7 @@ This window manager provides the fastest macOS window management experience by c
 - **Window Swapping**: Exchange positions with neighboring windows
 
 ### Layout Management
-- **Dynamic Resizing**: Start continuous resize operations in any direction
-- **Stop Resizing**: End active resize operations
+- **Dynamic Resizing**: Continuous resize operations in any direction, by mouse or keyboard
 - **Tree Rotation**: Rotate the entire tree structure left or right
 - **Reflect Layout**: Switch between horizontal and vertical splits in parent nodes
 

@@ -1,110 +1,177 @@
 # Window Manager Spoon
 
-A Hammerspoon spoon for managing windows using a Binary Space Partitioning (BSP) tree structure. This window manager automatically organizes windows into a tiled layout and provides focus management across multiple macOS Spaces.
+A high-performance Hammerspoon spoon for macOS window management using Binary Space Partitioning (BSP) trees. Built for rapid keyboard-only navigation and automatic tiling that works seamlessly with native macOS features.
 
-## How It Works
+## Overview
 
-### Core Architecture
+This window manager provides the fastest macOS window management experience by combining automatic BSP tiling with intelligent space management. It maintains separate tree structures for each macOS Space, enabling rapid keyboard navigation and automatic window organization without interfering with native macOS behavior.
 
-The window manager uses a **lazy-loading approach** that only manages windows in the currently focused space. This avoids complex space detection issues and provides better performance.
+## Key Features
 
-**Key Components:**
-- **Tree Structure**: Each space has its own BSP tree (`obj.trees[space_id]`)
+### Automatic BSP Tiling
+- **Binary Space Partitioning**: Windows are automatically organized into a tree structure with horizontal and vertical splits
+- **Intelligent Splitting**: New windows are placed based on mouse position relative to existing windows
+- **Dynamic Layout**: Tree structure adapts automatically as windows are added, removed, or moved
+- **Stack Management**: Multiple windows can occupy the same space in a stack with rotation support
+
+### Multi-Space Architecture
+- **Per-Space Trees**: Each macOS Space maintains its own independent BSP tree
+- **Lazy Loading**: Only the currently focused space is actively managed for optimal performance
+- **Cross-Space Focus**: Maintains focus tracking across spaces while respecting macOS behavior
+- **Space Detection**: Automatically detects maximized windows and skips management appropriately
+
+### Advanced Window Operations
+- **Neighbor Navigation**: Move focus between adjacent windows using directional commands
+- **Window Swapping**: Exchange positions of windows across the tree structure
+- **Dynamic Resizing**: Continuous resize operations with real-time split ratio adjustment
+- **Tree Rotation**: Rotate tree structure left or right for layout optimization
+- **Node Management**: Gather multiple nodes into one or explode single nodes into multiple
+
+### Intelligent Window Filtering
+- **Smart Detection**: Automatically excludes system windows, dialogs, and non-standard windows
+- **App Filtering**: Filters out specific applications like Raycast, System Settings, Spotlight, and Dock
+- **State Awareness**: Ignores minimized, full-screen, and floating windows
+- **Performance Optimization**: Only manages windows that benefit from tiling
+
+## User Commands
+
+### Navigation
+- **Focus Neighbor**: Move focus to adjacent windows in any direction (left, right, up, down)
+- **Next Window**: Rotate through windows in the current stack
+- **Window Swapping**: Exchange positions with neighboring windows
+
+### Layout Management
+- **Dynamic Resizing**: Start continuous resize operations in any direction
+- **Stop Resizing**: End active resize operations
+- **Tree Rotation**: Rotate the entire tree structure left or right
+- **Reflect Layout**: Switch between horizontal and vertical splits in parent nodes
+
+### Node Operations
+- **Gather Nodes**: Combine multiple child nodes into a single parent node
+- **Explode Node**: Split a multi-window node into separate individual nodes
+- **Toggle Management**: Enable/disable window management without restarting
+
+### Layout Persistence
+- **Automatic Saving**: Layouts are automatically saved on sleep and stop events
+- **Automatic Loading**: Layouts are restored on wake and startup
+- **Cross-Session Persistence**: Window arrangements persist across Hammerspoon restarts
+
+## Architecture
+
+### Core Components
+
+#### Tree Structure
+Each macOS Space maintains an independent BSP tree with:
+- **Root Node**: Contains all windows in the space with full screen dimensions
+- **Internal Nodes**: Split the space horizontally or vertically with configurable ratios
+- **Leaf Nodes**: Contain actual windows, supporting multiple windows per leaf (stacking)
+- **Selected Node**: Currently active leaf node for operations
+- **Focused Window**: The window that receives focus when switching spaces
+
+#### Event System
+The window manager subscribes to multiple Hammerspoon events:
+- **Window Creation**: Automatically adds new manageable windows to the current space
+- **Window Focus**: Updates selected node and maintains focus tracking
+- **Window Movement**: Handles drag-and-drop operations and space transitions
+- **Window Destruction**: Removes windows and collapses empty nodes
+- **Space Changes**: Switches between space trees and refreshes layouts
+- **Window Maximization**: Clears focus tracking for full-screen windows
+
+#### Performance Optimizations
 - **Lazy Loading**: Only the current space is actively managed
-- **Space Detection**: Automatically detects maximized windows and skips focus management
-- **Event Handling**: Responds to window movements, space changes, and focus events
+- **Event Throttling**: Window move events are throttled to prevent excessive processing
+- **Position Tracking**: Tracks window positions to distinguish user vs system moves
+- **Efficient Lookups**: Uses window ID-based comparisons for robust window tracking
 
-### Tree Structure
+### Algorithm Details
 
-Each space maintains a tree with:
-- **Root Node**: Contains all windows in the space
-- **Leaf Nodes**: Contain actual windows (can have multiple windows in a stack)
-- **Internal Nodes**: Split the space horizontally or vertically
-- **Selected Node**: Currently active leaf node
-- **Focused Window**: The window that should receive focus when switching spaces
+#### Window Placement Algorithm
+When a window is moved or created:
+1. **Position Analysis**: Calculate mouse position relative to existing windows
+2. **Edge Detection**: Determine which edge of a window the mouse is closest to
+3. **Split Decision**: Create horizontal or vertical splits based on edge proximity
+4. **Stack Management**: Add to existing stack if mouse is in center area
+5. **Tree Update**: Rebuild tree structure and apply new layout
 
-### Space Management
+#### Resize Algorithm
+For dynamic window resizing:
+1. **Parent Detection**: Find the appropriate split parent in the tree hierarchy
+2. **Ratio Calculation**: Update split ratios based on window position changes
+3. **Continuous Updates**: Apply changes in real-time during resize operations
+4. **Boundary Enforcement**: Maintain valid split ratios between 0.0 and 1.0
 
-- **Current Space Only**: Only manages windows in the currently focused space
-- **Maximized Window Detection**: Automatically detects when a space contains only maximized windows and skips focus management
-- **Cross-Space Focus**: Tracks focused windows across spaces but validates they're in the current space before focusing
-
-## Available Functions
-
-### Core Functions
-
-#### `obj:start()`
-Starts the window manager and sets up event listeners.
-
-#### `obj:stop()`
-Stops the window manager and cleans up event listeners.
-
-#### `obj:refreshTree()`
-Manually refreshes the tree structure for the current space. Useful for debugging or manual updates.
-
-### Tree Management
-
-#### `obj:getTreeForSpace(space_id)`
-Gets or creates a tree for a specific space.
-
-#### `obj:getCurrentTree()`
-Gets the tree for the currently focused space.
-
-#### `obj:getTreeForWindow(window)`
-Finds which tree contains a specific window.
-
-### Window Operations
-
-#### `obj:addNode(window, forceSpaceId)`
-Adds a window to the tree. If `forceSpaceId` is provided, adds to that specific space.
-
-#### `obj:closeWindow(window, optionalTree)`
-Removes a window from the tree and cleans up empty nodes.
-
-#### `obj:isWindowManageable(window)`
-Checks if a window should be managed by the window manager.
-
-### Layout and Display
-
-#### `obj:applyLayout(node)`
-Applies the BSP layout to windows in a tree node.
-
-#### `obj:printTreeWindows(node, depth)`
-Prints the tree structure for debugging purposes.
-
-### Event Handlers
-
-#### `obj:windowMovedHandler(window)`
-Handles window movement events.
-
-#### `obj:onSpaceChanged()`
-Handles space switching events.
+#### Space Management Algorithm
+For multi-space support:
+1. **Space Detection**: Identify the current space using macOS APIs
+2. **Tree Selection**: Switch to the appropriate tree for the current space
+3. **Window Migration**: Handle windows moving between spaces
+4. **Focus Preservation**: Maintain focus state across space transitions
 
 ## Configuration
 
 ### Window Filtering
+The window manager automatically excludes:
+- Non-standard windows (dialogs, floating windows)
+- Minimized or full-screen windows
+- System applications (Raycast, System Settings, Spotlight, Dock, Control Center)
+- Windows with invalid states or IDs
 
-The window manager automatically filters out certain types of windows:
+### Performance Settings
+- **Animation Duration**: Set to 0.0 for instant window movements
+- **Event Throttling**: 1-second minimum between window move events
+- **Refresh Control**: Prevents recursive refresh calls during operations
 
-**Excluded Window Types:**
-- Non-standard windows
-- Minimized windows
-- Full-screen windows
-- Floating windows and dialogs
-- System windows (Raycast, System Settings, Spotlight, Dock, etc.)
+### Layout Persistence
+- **Save Path**: `~/.hammerspoon/window-manager.layout.json`
+- **Auto-Save Triggers**: Sleep events, stop events, window destruction
+- **Auto-Load Triggers**: Wake events, startup, space changes
 
-### Space Management
+## Integration
 
-- **Lazy Loading**: Spaces are only initialized when first accessed
-- **Maximized Window Detection**: Automatically detects maximized window spaces
-- **Focus Tracking**: Maintains focus state across space switches
+### macOS Compatibility
+- **Native Space Support**: Works with macOS Spaces and Mission Control
+- **Multi-Monitor Support**: Handles multiple displays and their spaces
+- **System Integration**: Respects macOS window management conventions
+- **Accessibility**: Compatible with VoiceOver and other accessibility features
 
-## Event System
+### Hammerspoon Integration
+- **Spoon Architecture**: Follows Hammerspoon spoon conventions
+- **Event System**: Uses Hammerspoon's window filter and space watcher APIs
+- **Configuration**: Integrates with Hammerspoon's configuration system
+- **Logging**: Uses Hammerspoon's logging system for debugging
 
-The window manager subscribes to several Hammerspoon events:
+## Performance Characteristics
 
-- **Window Focus**: Updates selected node and focused window
-- **Window Movement**: Refreshes tree structure
-- **Window Creation/Destruction**: Adds/removes windows from trees
-- **Space Changes**: Switches between space trees
-- **Window Maximization**: Clears focus tracking for maximized windows
+### Memory Usage
+- **Minimal Overhead**: Only stores essential window and tree data
+- **Efficient Storage**: Uses UUIDs for node identification
+- **Garbage Collection**: Automatic cleanup of orphaned references
+
+### CPU Usage
+- **Event-Driven**: Only processes events when windows change
+- **Throttled Operations**: Prevents excessive processing during rapid changes
+- **Lazy Evaluation**: Defers expensive operations until necessary
+
+### Responsiveness
+- **Instant Feedback**: Window operations provide immediate visual feedback
+- **Smooth Animations**: Zero-duration animations for instant movement
+- **Non-Blocking**: Operations don't block the main thread
+
+## Technical Implementation
+
+### Data Structures
+- **Node Class**: Represents tree nodes with position, size, and window data
+- **Tree Objects**: Contain root node, selected node, and focused window
+- **Space Mapping**: Maps space IDs to tree objects for multi-space support
+
+### Error Handling
+- **Robust Window Operations**: Uses pcall for safe window manipulation
+- **Graceful Degradation**: Continues operation even if individual windows fail
+- **State Validation**: Validates window and tree states before operations
+
+### Memory Management
+- **Reference Tracking**: Maintains proper parent-child relationships
+- **Cleanup Operations**: Removes orphaned nodes and invalid references
+- **Garbage Collection**: Leverages Lua's garbage collector for cleanup
+
+This window manager represents the fastest and most feature-complete solution for macOS window management, providing both automatic tiling and powerful manual control while maintaining full compatibility with native macOS features.

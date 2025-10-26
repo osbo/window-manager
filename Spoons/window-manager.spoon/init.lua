@@ -485,6 +485,127 @@ function obj:focusNeighbor(direction)
     end
 end
 
+-- Swap the focused node with a neighbor node
+-- @param direction String: "left", "right", "up", "down"
+-- @return true if swap was successful, false otherwise
+function obj:swapNeighbor(direction)
+    print("Swapping with neighbor in direction '" .. direction .. "'")
+    
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    -- Find the node containing the focused window
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local focusedNode = tree.root:findNode(currentWindow)
+    if not focusedNode or not focusedNode.leaf then
+        print("Focused window not found in tree or not a leaf node")
+        return false
+    end
+    
+    -- Find the neighbor node
+    local neighborNode = obj:findNeighbor(currentWindow, direction)
+    if not neighborNode or not neighborNode.leaf then
+        print("No neighbor found in direction '" .. direction .. "' or neighbor is not a leaf")
+        return false
+    end
+    
+    print("Swapping focused node with neighbor node")
+    
+    -- Find the neighbor's tree
+    local neighborSpace_id, neighborTree = obj:getTreeForWindow(neighborNode.windows[1])
+    if not neighborTree then
+        print("Could not find tree for neighbor node")
+        return false
+    end
+    
+    -- Swap contents
+    focusedNode.windows, neighborNode.windows = neighborNode.windows, focusedNode.windows
+
+    -- Update tree selections
+    neighborTree.selected = neighborNode
+
+    -- Apply layout to both trees
+    obj:applyLayout(tree.root)
+    if neighborTree ~= tree then
+        obj:applyLayout(neighborTree.root)
+    end
+    
+    print("Successfully swapped nodes")
+    return true
+end
+
+-- Reflect the parent of the currently focused window
+-- @return true if reflection was successful, false otherwise
+function obj:reflect()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local node = tree.root:findNode(currentWindow)
+    if not node then
+        print("Focused window not found in tree")
+        return false
+    end
+    
+    local parent = node.parent
+    if not parent then
+        print("Focused window's node has no parent (it's the root)")
+        return false
+    end
+    
+    print("Reflecting parent node of focused window")
+    obj:reflectNode(parent)
+    
+    -- Apply layout to update visual representation
+    obj:applyLayout(tree.root)
+    
+    return true
+end
+
+-- Reflect a node by switching between horizontal and vertical split types (recursive)
+-- @param node The node to reflect
+function obj:reflectNode(node)
+    if not node or node.leaf then
+        return
+    end
+    
+    print("Reflecting node with split_type: " .. tostring(node.split_type))
+    
+    -- Switch split type
+    node.split_type = not node.split_type
+    
+    -- If switching from vertical to horizontal, swap children
+    if node.split_type then -- now horizontal (was vertical)
+        print("Swapping children for vertical to horizontal transition")
+        node.child1, node.child2 = node.child2, node.child1
+        node.split_ratio = 1 - node.split_ratio
+    end
+    
+    -- Apply recursively to children
+    if node.child1 then
+        obj:reflectNode(node.child1)
+    end
+    if node.child2 then
+        obj:reflectNode(node.child2)
+    end
+end
+
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then

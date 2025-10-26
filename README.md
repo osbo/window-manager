@@ -169,4 +169,4 @@ The window manager automatically excludes:
 - **Cleanup Operations**: Removes orphaned nodes and invalid references
 - **Garbage Collection**: Leverages Lua's garbage collector for cleanup
 
-This window manager represents the fastest and most feature-complete solution for macOS window management, providing both automatic tiling and powerful manual control while maintaining full compatibility with native macOS features.
+This window manager represents the a very fast and feature-complete solution for macOS window management, providing both automatic tiling and powerful manual control while maintaining full compatibility with native macOS features. I completed the project in three days.

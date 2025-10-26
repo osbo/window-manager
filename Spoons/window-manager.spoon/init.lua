@@ -519,6 +519,128 @@ function obj:nextWindow()
     return true
 end
 
+-- Resize the current window by adjusting split ratios
+-- @param direction String: "left", "right", "up", "down"
+-- @return true if resize was successful, false otherwise
+function obj:resizeWindow(direction)
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local node = tree.root:findNode(currentWindow)
+    if not node or not node.leaf then
+        print("Focused window not found in tree or not in a leaf node")
+        return false
+    end
+    
+    local adjustment = 0.001
+    local adjustment_factor = 1.3
+    local found = false
+    local targetParent = nil
+    
+    -- Find the appropriate split parent
+    if direction == "left" or direction == "right" then
+        -- Find first horizontal split
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == true then
+                targetParent = parentNode
+                found = true
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+    elseif direction == "up" or direction == "down" then
+        -- Find first vertical split
+        local childNode = node
+        local parentNode = node.parent
+        while parentNode do
+            if parentNode.split_type == false then
+                targetParent = parentNode
+                found = true
+                break
+            end
+            childNode = parentNode
+            parentNode = parentNode.parent
+        end
+    end
+    
+    if not found then
+        print("No appropriate split found for resizing in direction: " .. direction)
+        return false
+    end
+    
+    -- Start continuous resizing timer
+    if obj.resizeTimers and obj.resizeTimers[direction] then
+        obj.resizeTimers[direction]:stop()
+    end
+    
+    if not obj.resizeTimers then
+        obj.resizeTimers = {}
+    end
+    
+    -- Set up a flag to track if we should continue resizing
+    obj.resizeActive = obj.resizeActive or {}
+    obj.resizeActive[direction] = true
+    
+    obj.resizeTimers[direction] = hs.timer.doEvery(0.01, function()
+        -- Check if resize is still active
+        if not obj.resizeActive or not obj.resizeActive[direction] then
+            -- Resize stopped, clean up timer
+            if obj.resizeTimers[direction] then
+                obj.resizeTimers[direction]:stop()
+                obj.resizeTimers[direction] = nil
+            end
+            return
+        end
+        
+        -- Adjust split ratio based on direction and which side we're on
+        if direction == "left" then
+            -- Moving left on left side: decrease ratio (make left side smaller)
+            targetParent.split_ratio = math.max(math.min(targetParent.split_ratio - adjustment, 1.0), 0.0)
+        elseif direction == "right" then
+            -- Moving right on left side: increase ratio (make left side bigger)
+            targetParent.split_ratio = math.max(math.min(targetParent.split_ratio + adjustment, 1.0), 0.0)
+        elseif direction == "up" then
+            -- Moving up on top side: decrease ratio (make top side smaller)
+            targetParent.split_ratio = math.max(math.min(targetParent.split_ratio - adjustment, 1.0), 0.0)
+        elseif direction == "down" then
+            -- Moving down on top side: increase ratio (make top side bigger)
+            targetParent.split_ratio = math.max(math.min(targetParent.split_ratio + adjustment, 1.0), 0.0)
+        end
+
+        adjustment = adjustment * adjustment_factor
+        
+        -- Apply layout
+        obj:applyLayout(tree.root)
+    end)
+    
+    print("Started continuous resizing in direction: " .. direction)
+    return true
+end
+
+-- Stop resizing in a specific direction
+function obj:stopResize(direction)
+    if obj.resizeActive then
+        obj.resizeActive[direction] = false
+    end
+    if obj.resizeTimers and obj.resizeTimers[direction] then
+        obj.resizeTimers[direction]:stop()
+        obj.resizeTimers[direction] = nil
+    end
+    print("Stopped resizing in direction: " .. direction)
+end
+
 -- Swap the focused node with a neighbor node
 -- @param direction String: "left", "right", "up", "down"
 -- @return true if swap was successful, false otherwise

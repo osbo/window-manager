@@ -1132,7 +1132,7 @@ end
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then
-        -- print(string.rep("  ", depth) .. "nil")
+        print(string.rep("  ", depth) .. "nil")
         return
     end
     
@@ -1148,15 +1148,15 @@ function obj:printTreeWindows(node, depth)
                 table.insert(windowTitles, "[Invalid Window]")
             end
         end
-        -- print(indent .. "Leaf: [" .. table.concat(windowTitles, ", ") .. "]")
+        print(indent .. "Leaf: [" .. table.concat(windowTitles, ", ") .. "]")
     else
-        -- print(indent .. "Internal (split: " .. (node.split_type and "horizontal" or "vertical") .. ")")
+        print(indent .. "Internal (split: " .. (node.split_type and "horizontal" or "vertical") .. ")")
         if node.child1 then
-            -- print(indent .. "  Child1:")
+            print(indent .. "  Child1:")
             obj:printTreeWindows(node.child1, depth + 2)
         end
         if node.child2 then
-            -- print(indent .. "  Child2:")
+            print(indent .. "  Child2:")
             obj:printTreeWindows(node.child2, depth + 2)
         end
     end
@@ -2048,6 +2048,43 @@ function obj:loadLayout()
         return node
     end
     
+    -- Helper function to clean up empty leaf nodes
+    local function cleanupEmptyNodes(node)
+        if not node then return nil end
+        
+        if node.leaf then
+            -- If this is a leaf node with no windows, return nil to remove it
+            if #node.windows == 0 then
+                return nil
+            end
+            return node
+        else
+            -- This is an internal node, clean up children first
+            if node.child1 then
+                node.child1 = cleanupEmptyNodes(node.child1)
+            end
+            if node.child2 then
+                node.child2 = cleanupEmptyNodes(node.child2)
+            end
+            
+            -- If both children are now nil, this internal node should be removed
+            if not node.child1 and not node.child2 then
+                return nil
+            end
+            
+            -- If only one child remains, promote it to replace this node
+            if not node.child1 and node.child2 then
+                node.child2.parent = node.parent
+                return node.child2
+            elseif node.child1 and not node.child2 then
+                node.child1.parent = node.parent
+                return node.child1
+            end
+            
+            return node
+        end
+    end
+
     -- Clear existing trees and load the saved ones
     obj.trees = {}
     for space_id_str, tree_data in pairs(decoded_layout) do
@@ -2058,7 +2095,12 @@ function obj:loadLayout()
             focused_window = nil
         }
         
-        -- Find the selected node by ID
+        -- Clean up empty nodes after reconstruction
+        if tree.root then
+            tree.root = cleanupEmptyNodes(tree.root)
+        end
+        
+        -- Find the selected node by ID (after cleanup)
         if tree_data.selected and tree.root then
             local function findNodeById(node, target_id)
                 if not node then return nil end
@@ -2075,10 +2117,13 @@ function obj:loadLayout()
             tree.focused_window = hs.window.get(tree_data.focused_window)
         end
         
-        obj.trees[space_id] = tree
+        -- Only add the tree if it has a valid root after cleanup
+        if tree.root then
+            obj.trees[space_id] = tree
+        end
     end
     
-    -- print("WindowManager: Window layout loaded.")
+    print("WindowManager: Window layout loaded.")
     
     -- Debug: Print the loaded layout after loading
     -- print("=== LAYOUT AFTER LOADING ===")
@@ -2086,6 +2131,8 @@ function obj:loadLayout()
     --     print("Space " .. space_id .. ":")
     --     if tree.root then
     --         obj:printTreeWindows(tree.root, 0)
+    --     else
+    --         print("  (empty tree - no valid windows found)")
     --     end
     -- end
     -- print("=== END LAYOUT AFTER LOADING ===")

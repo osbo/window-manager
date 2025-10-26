@@ -61,3 +61,10 @@ end)
 hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "n", function()
     wm:explodeNode()
 end)
+
+-- Keybinding for rotating windows in current node
+-- Hyper + Space to rotate windows in the current node's stack
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "space", function()
+    wm:nextWindow()
+    wm:nextWindow()
+end)

@@ -206,14 +206,17 @@ function obj:setupWindowWatcher()
                 local foundNode = tree.root:findNode(window)
                 if foundNode then
                     tree.selected = foundNode
-                    -- Reorder window in stack: remove from current position and append to end (front)
-                    for i, w in ipairs(foundNode.windows) do
-                        if w:id() == window:id() then
-                            table.remove(foundNode.windows, i)
-                            break
+                    -- Only reorder window in stack if not in a manual operation
+                    if not obj._refreshing then
+                        -- Reorder window in stack: remove from current position and append to end (front)
+                        for i, w in ipairs(foundNode.windows) do
+                            if w:id() == window:id() then
+                                table.remove(foundNode.windows, i)
+                                break
+                            end
                         end
+                        table.insert(foundNode.windows, window)
                     end
-                    table.insert(foundNode.windows, window)
                 end
             end
 
@@ -357,13 +360,13 @@ function obj:getTreeForWindow(window)
     return nil, nil
 end
 
-function obj:getNodeAtPosition(x, y)
+function obj:getNodeAtPosition(x, y, ignoreWindow)
     print("getNodeAtPosition called with: " .. x .. ", " .. y)
     
     -- Get all windows and find the first one that contains the point
     local allWindows = hs.window.orderedWindows()
     for _, window in ipairs(allWindows) do
-        if obj:isWindowManageable(window) then
+        if obj:isWindowManageable(window) and window:id() ~= ignoreWindow:id() then
             local frame = window:frame()
             if x >= frame.x and x < frame.x + frame.w and
                y >= frame.y and y < frame.y + frame.h then
@@ -449,13 +452,71 @@ function obj:focusNeighbor(direction)
     
     local neighborNode = obj:findNeighbor(currentWindow, direction)
     if neighborNode and neighborNode.windows and neighborNode.windows[1] then
-        neighborNode.windows[1]:focus()
-        print("Focused neighbor: " .. neighborNode.windows[1]:title())
+        local neighborWindow = neighborNode.windows[1]
+        neighborWindow:focus()
+        
+        -- Center the mouse position in the focused window
+        local windowFrame = neighborWindow:frame()
+        local centerX = windowFrame.x + windowFrame.w / 2
+        local centerY = windowFrame.y + windowFrame.h / 2
+        hs.mouse.absolutePosition({x = centerX, y = centerY})
+        
+        print("Focused neighbor: " .. neighborWindow:title())
         return true
     else
         print("No neighbor found in direction '" .. direction .. "'")
         return false
     end
+end
+
+-- Rotate the windows in the current node's stack
+-- @return true if rotation was successful, false otherwise
+function obj:nextWindow()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local node = tree.root:findNode(currentWindow)
+    if not node or not node.leaf then
+        print("Focused window not found in tree or not in a leaf node")
+        return false
+    end
+    
+    if #node.windows <= 1 then
+        print("Node has only one window, nothing to rotate")
+        return false
+    end
+    
+    -- Temporarily disable refresh to prevent interference
+    local wasRefreshing = obj._refreshing
+    obj._refreshing = true
+    
+    -- Rotate the windows table: move the last window to the front
+    local lastWindow = table.remove(node.windows)
+    table.insert(node.windows, 1, lastWindow)
+    
+    -- Focus the new front window
+    node.windows[1]:focus()
+    
+    -- Update tree selection
+    tree.selected = node
+    
+    -- Apply layout to update the display
+    obj:applyLayout(tree.root)
+    
+    -- Restore refresh state
+    obj._refreshing = wasRefreshing
+    
+    print("Rotated windows in node, now focused: " .. node.windows[1]:title())
+    return true
 end
 
 -- Swap the focused node with a neighbor node
@@ -826,7 +887,7 @@ function obj:windowMovedHandler(window)
         end
     end
 
-    local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y)
+    local node = obj:getNodeAtPosition(mousePosition.x, mousePosition.y, window)
     
     if node then
         -- Store node info in local variables to prevent corruption
@@ -844,16 +905,22 @@ function obj:windowMovedHandler(window)
         local mouseX = mousePosition.x
         local mouseY = mousePosition.y
         
-        local distToLeft = mouseX - nodeX
-        local distToRight = (nodeX + nodeW) - mouseX
-        local distToTop = mouseY - nodeY
-        local distToBottom = (nodeY + nodeH) - mouseY
+        local distToLeft = (mouseX - nodeX) / nodeW
+        local distToRight = ((nodeX + nodeW) - mouseX) / nodeW
+        local distToTop = (mouseY - nodeY) / nodeH
+        local distToBottom = ((nodeY + nodeH) - mouseY) / nodeH
         
         -- Find the minimum distance to determine closest edge
         local minDistance = math.min(distToLeft, distToRight, distToTop, distToBottom)
         
         -- Check if mouse is in center area (not too close to any edge)
-        local centerThreshold = math.min(nodeW, nodeH) * 0.33 -- 33% of smaller dimension
+        local centerThreshold = 0.33 -- 33% of smaller dimension
+        
+        -- Debug logging
+        print("Node dimensions: " .. nodeW .. "x" .. nodeH)
+        print("Mouse distances - Left: " .. distToLeft .. ", Right: " .. distToRight .. ", Top: " .. distToTop .. ", Bottom: " .. distToBottom)
+        print("Min distance: " .. minDistance .. ", Center threshold: " .. centerThreshold)
+        
         if minDistance > centerThreshold then
             print("Adding to stack (center area)")
             obj:addWindowToStack(window, targetTree)
@@ -886,6 +953,8 @@ function obj:windowMovedHandler(window)
     else
         print("Window tree not found")
     end
+
+    obj:refreshTree()
 end
 
 function obj:handleWindowResize(window, currentFrame, lastFrame, tree)

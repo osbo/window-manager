@@ -366,7 +366,7 @@ function obj:getNodeAtPosition(x, y, ignoreWindow)
     -- Get all windows and find the first one that contains the point
     local allWindows = hs.window.orderedWindows()
     for _, window in ipairs(allWindows) do
-        if obj:isWindowManageable(window) and window:id() ~= ignoreWindow:id() then
+        if obj:isWindowManageable(window) and (not ignoreWindow or window:id() ~= ignoreWindow:id()) then
             local frame = window:frame()
             if x >= frame.x and x < frame.x + frame.w and
                y >= frame.y and y < frame.y + frame.h then
@@ -452,7 +452,7 @@ function obj:focusNeighbor(direction)
     
     local neighborNode = obj:findNeighbor(currentWindow, direction)
     if neighborNode and neighborNode.windows and neighborNode.windows[1] then
-        local neighborWindow = neighborNode.windows[1]
+        local neighborWindow = neighborNode.windows[#neighborNode.windows]
         neighborWindow:focus()
         
         -- Center the mouse position in the focused window

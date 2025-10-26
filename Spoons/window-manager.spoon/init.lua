@@ -643,6 +643,64 @@ function obj:gatherNodes()
     return true
 end
 
+-- Explode current node's windows into separate nodes
+-- @return true if successful, false otherwise
+function obj:explodeNode()
+    local currentWindow = hs.window.focusedWindow()
+    if not currentWindow then
+        print("No focused window found")
+        return false
+    end
+    
+    local space_id, tree = obj:getTreeForWindow(currentWindow)
+    if not tree or not tree.root then
+        print("No tree found for focused window: " .. currentWindow:title())
+        return false
+    end
+    
+    local node = tree.root:findNode(currentWindow)
+    if not node then
+        print("Focused window not found in tree")
+        return false
+    end
+    
+    -- Save the windows table before making any changes
+    local windowsToSplit = {}
+    for _, window in ipairs(node.windows) do
+        table.insert(windowsToSplit, window)
+    end
+    
+    if #windowsToSplit <= 1 then
+        print("Node has only one window, nothing to split")
+        return false
+    end
+    
+    print("Exploding " .. #windowsToSplit .. " windows into separate nodes")
+    
+    -- Reverse the table so most recently focused windows are added first
+    for i = 1, math.floor(#windowsToSplit / 2) do
+        local j = #windowsToSplit - i + 1
+        windowsToSplit[i], windowsToSplit[j] = windowsToSplit[j], windowsToSplit[i]
+    end
+    
+    -- Keep the first window (now the most recently focused) in the current node
+    local firstWindow = windowsToSplit[1]
+    node.windows = {firstWindow}
+    
+    -- Add each remaining window as a new node (in reverse order)
+    for i = 2, #windowsToSplit do
+        local window = windowsToSplit[i]
+        print("Adding window as new node: " .. window:title())
+        obj:addNode(window, tree)
+    end
+    
+    -- Apply layout to update visual representation
+    obj:applyLayout(tree.root)
+    
+    print("Successfully exploded node into " .. #windowsToSplit .. " separate nodes")
+    return true
+end
+
 -- Debug helper to print all windows in a tree
 function obj:printTreeWindows(node, depth)
     if not node then

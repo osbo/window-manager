@@ -55,3 +55,9 @@ end)
 hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "h", function()
     wm:gatherNodes()
 end)
+
+-- Keybinding for exploding nodes
+-- Hyper + N to explode current node's windows into separate nodes
+hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "n", function()
+    wm:explodeNode()
+end)

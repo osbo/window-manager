@@ -66,7 +66,6 @@ end)
 -- Hyper + Space to rotate windows in the current node's stack
 hs.hotkey.bind({"cmd", "alt", "ctrl", "shift"}, "space", function()
     wm:nextWindow()
-    wm:nextWindow()
 end)
 
 -- Keybindings for resizing windows (repeatedly while held)

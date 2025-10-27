@@ -232,7 +232,7 @@ function obj:setupWindowWatcher()
                 obj:addNode(window, tree)
                 
                 -- 2. Apply Layout
-                obj:applyAllLayouts()
+                obj:applyLayout(tree.root)
             end
         end)
         
@@ -246,6 +246,11 @@ function obj:setupWindowWatcher()
         
         local space_id, tree = obj:getTreeForWindow(window)
         if tree and tree.root then
+            local node = tree.root:findNode(window)
+            if node then
+                tree.selected = node
+                obj:applyLayout(node)
+            end
             obj:printTreeWindows(tree.root, 0)
         end
     end)
@@ -255,7 +260,7 @@ function obj:setupWindowWatcher()
         
         -- 1. Mutate State
             -- obj:closeWindow(window, nil)
-            obj:refreshTree()
+        obj:refreshTree()
         
         -- 2. Apply Layout (to reclaim the space)
         obj:applyAllLayouts()
@@ -290,7 +295,7 @@ function obj:setupWindowWatcher()
             -- obj:closeWindow(window, nil)
             obj:refreshTree()
             -- 2. Apply Layout
-            obj:applyAllLayouts()
+            obj:applyLayout(tree.root)
         end
     end)
 
@@ -301,7 +306,7 @@ function obj:setupWindowWatcher()
             -- obj:closeWindow(window, nil)
             obj:refreshTree()
             -- 2. Apply Layout
-            obj:applyAllLayouts()
+            obj:applyLayout(tree.root)
         end
     end)
 
@@ -313,7 +318,7 @@ function obj:setupWindowWatcher()
             local tree = obj:getTreeForSpace(space_id)
             obj:addNode(window, tree)
             -- 2. Apply Layout
-            obj:applyAllLayouts()
+            obj:applyLayout(tree.root)
         end
     end)
 
@@ -325,7 +330,7 @@ function obj:setupWindowWatcher()
             local tree = obj:getTreeForSpace(space_id)
             obj:addNode(window, tree)
             -- 2. Apply Layout
-            obj:applyAllLayouts()
+            obj:applyLayout(tree.root)
         end
     end)
 end
@@ -567,7 +572,7 @@ function obj:nextWindow()
     tree.selected = node
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(node)
     
     -- print("Rotated windows in node, now focused: " .. node.windows[1]:title())
     return true
@@ -671,8 +676,10 @@ function obj:resizeWindow(direction)
 
         adjustment = adjustment * adjustment_factor
         
-        -- Apply layout to all trees
-        obj:applyAllLayouts()
+        -- Apply layout to the tree
+        if targetParent then
+            obj:applyLayout(targetParent)
+        end
     end)
     
     -- print("Started continuous resizing in direction: " .. direction)
@@ -739,7 +746,12 @@ function obj:swapNeighbor(direction)
     neighborTree.selected = neighborNode
 
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    if tree and tree.root then
+        obj:applyLayout(tree.root)
+    end
+    if neighborTree and neighborTree.root and neighborTree.root ~= tree.root then
+        obj:applyLayout(neighborTree.root)
+    end
     
     -- print("Successfully swapped nodes")
     return true
@@ -776,7 +788,7 @@ function obj:reflect()
     obj:reflectNode(parent)
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(parent)
     
     return true
 end
@@ -899,7 +911,7 @@ function obj:rotateLeft()
     obj:printTreeWindows(tree.root, 0)
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(tree.root)
     return true
 end
 
@@ -993,7 +1005,7 @@ function obj:rotateRight()
     obj:printTreeWindows(tree.root, 0)
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(tree.root)
     return true
 end
 
@@ -1064,7 +1076,7 @@ function obj:gatherNodes()
     tree.selected = parent
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(parent)
     
     -- print("Successfully gathered " .. #allWindows .. " windows into parent node")
     return true
@@ -1104,12 +1116,6 @@ function obj:explodeNode()
     
     -- print("Exploding " .. #windowsToSplit .. " windows into separate nodes")
     
-    -- Reverse the table so most recently focused windows are added first
-    for i = 1, math.floor(#windowsToSplit / 2) do
-        local j = #windowsToSplit - i + 1
-        windowsToSplit[i], windowsToSplit[j] = windowsToSplit[j], windowsToSplit[i]
-    end
-    
     -- Keep the first window (now the most recently focused) in the current node
     local firstWindow = windowsToSplit[1]
     node.windows = {firstWindow}
@@ -1122,7 +1128,7 @@ function obj:explodeNode()
     end
     
     -- Apply layout to all trees
-    obj:applyAllLayouts()
+    obj:applyLayout(node)
     
     -- print("Successfully exploded node into " .. #windowsToSplit .. " separate nodes")
     return true
@@ -1239,7 +1245,7 @@ function obj:windowMovedHandler(window)
         print("Window resized: " .. window:title())
         obj:handleWindowResize(window, currentFrame, lastFrame, targetTree)
 
-        obj:applyAllLayouts()
+        obj:applyLayout(targetTree.root)
         return
     end
 
@@ -1328,7 +1334,10 @@ function obj:windowMovedHandler(window)
     end
 
     -- Apply layout to all trees after window move operations
-    obj:applyAllLayouts()
+    obj:applyLayout(targetTree.root)
+    if windowTree and windowTree.root and windowTree.root ~= targetTree.root then
+        obj:applyLayout(windowTree.root)
+    end
 end
 
 function obj:handleWindowResize(window, currentFrame, lastFrame, tree)

@@ -57,7 +57,7 @@ function Node:findNode(window)
     end
 end
 
-    obj.trees = {} -- Array: [space_id] = { root = node, selected = node, focused_window = window }
+    obj.trees = {} -- Array: [space_id] = { root = node, selected = node }
     obj._eventListenersActive = true -- Flag to control event listener activity
     obj.stopWM = false -- Dedicated flag to completely stop window manager functionality
     obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
@@ -230,8 +230,7 @@ function obj:setupWindowWatcher()
             local tree = obj:getTreeForSpace(space_id)
             if not tree then return end
             
-            -- Always track the focused window, even if not manageable
-            tree.focused_window = window
+            -- Track focused window for selection purposes
             
             -- Only update selected node if the window is manageable
             if obj:isWindowManageable(window) and tree.root then
@@ -294,13 +293,7 @@ function obj:setupWindowWatcher()
     self.windowWatcher:subscribe(hs.window.filter.windowFullscreened, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
         -- print("Window maximized: " .. window:title())
-        -- Clear focus tracking for all spaces since maximized windows create their own space
-        for space_id, tree in pairs(obj.trees) do
-            if tree.focused_window and tree.focused_window:id() == window:id() then
-                tree.focused_window = nil
-                -- print("Cleared focus tracking for maximized window")
-            end
-        end
+        -- Maximized windows create their own space, no special handling needed
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowMinimized, function(window)
@@ -365,8 +358,7 @@ function obj:getTreeForSpace(space_id)
         )
         obj.trees[space_id] = {
             root = new_root,
-            selected = new_root,
-            focused_window = nil
+            selected = new_root
         }
     end
     
@@ -1920,8 +1912,7 @@ function obj:saveLayout()
         -- Keys in JSON must be strings, so we convert the space_id
         layout_to_save[tostring(space_id)] = {
             root = cleanNode(tree.root),
-            selected = tree.selected and tree.selected.id or nil,
-            focused_window = tree.focused_window and tree.focused_window:id() or nil
+            selected = tree.selected and tree.selected.id or nil
         }
     end
 
@@ -2110,8 +2101,7 @@ function obj:loadLayout()
         local space_id = tonumber(space_id_str)
         local tree = {
             root = reconstructNode(tree_data.root),
-            selected = nil,
-            focused_window = nil
+            selected = nil
         }
         
         -- Clean up empty nodes after reconstruction
@@ -2131,10 +2121,7 @@ function obj:loadLayout()
             tree.selected = findNodeById(tree.root, tree_data.selected)
         end
         
-        -- Find the focused window by ID
-        if tree_data.focused_window then
-            tree.focused_window = hs.window.get(tree_data.focused_window)
-        end
+        -- Focused window tracking removed
         
         -- Only add the tree if it has a valid root after cleanup
         if tree.root then

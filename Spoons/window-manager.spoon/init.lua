@@ -127,13 +127,6 @@ function obj:start()
     -- ADD THIS LINE:
     obj:applyAllLayouts() -- Apply any changes found during reconciliation
     
-    -- NEW: Watch for space changes
-    self.spaceWatcher = hs.spaces.watcher.new(function()
-        if not obj._eventListenersActive then return end
-        obj:onSpaceChanged()
-    end)
-    self.spaceWatcher:start()
-    
     -- Initialize and start the sleep watcher
     obj.caffeinateWatcher = hs.caffeinate.watcher.new(function(event)
         if event == hs.caffeinate.watcher.screensDidSleep then
@@ -159,12 +152,6 @@ function obj:stop()
     if self.windowWatcher then
         self.windowWatcher:delete()
         self.windowWatcher = nil
-    end
-    
-    -- NEW: Stop space watcher
-    if self.spaceWatcher then
-        self.spaceWatcher:stop()
-        self.spaceWatcher = nil
     end
     
     -- Stop and remove the sleep watcher
@@ -1446,22 +1433,6 @@ function obj:handleWindowResize(window, currentFrame, lastFrame, tree)
     end
 end
 
-
----
---- NEW: Handle space switching - simplified to just track focus, let macOS handle actual focusing
----
-function obj:onSpaceChanged()
-    -- print("Space changed.")
-
-    -- 1. Reconcile state for the new space
-    obj:refreshTrees()
-
-    -- 2. Apply layout for all trees (in case windows moved)
-    obj:applyAllLayouts()
-
-    -- print("Space switched - letting macOS handle focus naturally")
-end
-
 function obj:applyLayout(node)
 
     if not node then return end
@@ -1781,7 +1752,7 @@ function obj:refreshTrees()
     end
     
     obj._refreshing = true
-    print("Refreshing tree")
+    print("Refreshing trees")
 
     local active_windows_by_spaces = {}
     local allWindows = hs.window.orderedWindows()
@@ -1828,22 +1799,35 @@ function obj:saveLayout()
             child2 = nil
         }
         
-        -- IMPORTANT: Save window titles and bundle IDs for reconstruction
+        -- IMPORTANT: Save window titles and application names for reconstruction
         if node.windows then
             for _, win in ipairs(node.windows) do
                 if win and win:id() then
-                    local app = win:application()
-                    local bundleID = app and app:bundleID() or "unknown"
+                    local success, app = pcall(win.application, win)
+                    local app_name = "unknown"
                     local window_index = nil
+                    local window_title = "Unknown"
+                    local window_id = win:id()
                     
-                    -- Find the window's index within its application's window list
-                    if app then
-                        local app_windows = hs.application.applicationsForBundleID(bundleID)
-                        if app_windows and #app_windows > 0 then
-                            local app_instance = app_windows[1] -- Get the first (usually only) app instance
-                            local windows = app_instance:allWindows()
+                    -- Safely get window title
+                    local title_success, title = pcall(win.title, win)
+                    if title_success and title then
+                        window_title = title
+                    end
+                    
+                    -- Safely get application info
+                    if success and app then
+                        local app_success, name = pcall(app.name, app)
+                        if app_success and name then
+                            app_name = name
+                        end
+                        
+                        -- Find the window's index within its application's window list
+                        local windows_success, windows = pcall(app.allWindows, app)
+                        if windows_success and windows then
                             for i, app_win in ipairs(windows) do
-                                if app_win:id() == win:id() then
+                                local win_id_success, app_win_id = pcall(app_win.id, app_win)
+                                if win_id_success and app_win_id and app_win_id == window_id then
                                     window_index = i
                                     break
                                 end
@@ -1852,13 +1836,13 @@ function obj:saveLayout()
                     end
                     
                     local window_info = {
-                        id = win:id(),
-                        title = win:title(),
-                        bundleID = bundleID,
+                        id = window_id,
+                        title = window_title,
+                        appName = app_name,
                         windowIndex = window_index
                     }
                     table.insert(clean_node.windows, window_info)
-                    print("Saving window: " .. win:title() .. " (ID: " .. win:id() .. ", Bundle: " .. bundleID .. ", Index: " .. tostring(window_index) .. ")")
+                    print("Saving window: " .. window_title .. " (ID: " .. window_id .. ", App: " .. app_name .. ", Index: " .. tostring(window_index) .. ")")
                 end
             end
         end
@@ -1933,34 +1917,6 @@ function obj:loadLayout()
         print("WindowManager: Failed to decode layout file. Starting fresh.")
         return
     end
-    
-    -- Create lookup table for windows by bundle ID before reconstruction
-    local bundleID_to_windows = {}
-    local allSpaces = hs.spaces.allSpaces()
-    for screen_id, spaces in pairs(allSpaces) do
-        if spaces then
-            for _, space_id in ipairs(spaces) do
-                local window_ids = hs.spaces.windowsForSpace(space_id)
-                if window_ids then
-                    for _, window_id in ipairs(window_ids) do
-                        local window = hs.window.get(window_id)
-                        if window then
-                            local app = window:application()
-                            if app then
-                                local bundleID = app:bundleID()
-                                if bundleID then
-                                    if not bundleID_to_windows[bundleID] then
-                                        bundleID_to_windows[bundleID] = {}
-                                    end
-                                    table.insert(bundleID_to_windows[bundleID], window)
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
 
     -- Helper function to reconstruct a node from saved data
     local function reconstructNode(node_data)
@@ -1982,38 +1938,83 @@ function obj:loadLayout()
         -- Set the metatable to give the node access to Node methods
         setmetatable(node, Node)
         
-        -- Reconstruct windows using the lookup table
+        -- Reconstruct windows using improved matching logic
         if node_data.windows then
             for _, window_info in ipairs(node_data.windows) do
+                local appName = window_info.appName
+                local savedTitle = window_info.title
+                local savedId = window_info.id
+                local windowIndex = window_info.windowIndex
+                
+                print("Looking for window: " .. savedTitle .. " (ID: " .. savedId .. ", App: " .. appName .. ", Index: " .. tostring(windowIndex) .. ")")
+                
                 local window = nil
                 
-                -- Handle both old format (just ID number) and new format (object with id, title, bundleID)
-                if type(window_info) == "number" then
-                    -- Old format: just window ID
-                    window = hs.window.get(window_info)
-                else
-                    -- New format: object with id, title, bundleID
-                    -- First try to find by ID (in case it's still valid)
-                    if window_info.id then
-                        window = hs.window.get(window_info.id)
+                -- Method 1: Try to find by window ID first (most reliable)
+                if savedId then
+                    local success, allWindows = pcall(hs.window.allWindows)
+                    if success and allWindows then
+                        for _, win in ipairs(allWindows) do
+                            local winId = win and win:id()
+                            if winId and winId == savedId then
+                                window = win
+                                print("Found window by ID: " .. (win:title() or "Unknown"))
+                                break
+                            end
+                        end
                     end
-                    
-                    -- If not found by ID, use lookup table to find by bundle ID
-                    if not window and window_info.bundleID and bundleID_to_windows[window_info.bundleID] then
-                        local candidates = bundleID_to_windows[window_info.bundleID]
-                        
-                        -- Try to use the saved window index if available
-                        if window_info.windowIndex and candidates[window_info.windowIndex] then
-                            window = candidates[window_info.windowIndex]
-                        else
-                            -- Fallback to first available window for this bundle ID
-                            window = candidates[1]
+                end
+                
+                -- Method 2: If not found by ID, try by application + title
+                if not window and appName and savedTitle then
+                    local success, app = pcall(hs.application.get, appName)
+                    if success and app then
+                        local success2, windows = pcall(app.allWindows, app)
+                        if success2 and windows then
+                            for _, win in ipairs(windows) do
+                                local winTitle = win and win:title()
+                                if winTitle and winTitle == savedTitle then
+                                    window = win
+                                    print("Found window by app+title: " .. winTitle)
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                -- Method 3: If still not found, try by application + index (fallback)
+                if not window and appName and windowIndex then
+                    local success, app = pcall(hs.application.get, appName)
+                    if success and app then
+                        local success2, windows = pcall(app.allWindows, app)
+                        if success2 and windows and windows[windowIndex] then
+                            window = windows[windowIndex]
+                            local winTitle = window and window:title()
+                            print("Found window by app+index: " .. (winTitle or "Unknown"))
+                        end
+                    end
+                end
+                
+                -- Method 4: If still not found, try to find any window from the same app
+                if not window and appName then
+                    local success, app = pcall(hs.application.get, appName)
+                    if success and app then
+                        local success2, windows = pcall(app.allWindows, app)
+                        if success2 and windows and #windows > 0 then
+                            window = windows[1] -- Take the first available window
+                            local winTitle = window and window:title()
+                            print("Found window by app only (first available): " .. (winTitle or "Unknown"))
                         end
                     end
                 end
                 
                 if window then
                     table.insert(node.windows, window)
+                    local winTitle = window and window:title()
+                    print("Successfully reconstructed window: " .. (winTitle or "Unknown"))
+                else
+                    print("Failed to reconstruct window: " .. (savedTitle or "Unknown") .. " from app: " .. (appName or "Unknown"))
                 end
             end
         end
@@ -2068,58 +2069,55 @@ function obj:loadLayout()
     --     end
     -- end
 
-    -- Get all current spaces before loading
-    local allSpaces = hs.spaces.allSpaces()
-    local existing_spaces = {}
-    if allSpaces then
-        for screen_id, spaces in pairs(allSpaces) do
-            if spaces then
-                for _, space_id in ipairs(spaces) do
-                    existing_spaces[space_id] = true
-                end
-            end
-        end
-    end
-
     -- Clear existing trees and load the saved ones
     obj.trees = {}
     for space_id_str, tree_data in pairs(decoded_layout) do
         local space_id = tonumber(space_id_str)
+        print("Loading tree for space: " .. space_id)
+        local tree = {
+            root = reconstructNode(tree_data.root),
+            selected = nil
+        }
+        print("Tree: " .. hs.inspect(tree))
         
-        -- Only load trees for spaces that still exist
-        if existing_spaces[space_id] then
-            local tree = {
-                root = reconstructNode(tree_data.root),
-                selected = nil
-            }
-            
-            -- Clean up empty nodes after reconstruction
-            -- if tree.root then
-            --     tree.root = cleanupEmptyNodes(tree.root)
-            -- end
-            
-            -- Find the selected node by ID (after cleanup)
-            if tree_data.selected and tree.root then
-                local function findNodeById(node, target_id)
-                    if not node then return nil end
-                    if node.id == target_id then return node end
-                    local found = findNodeById(node.child1, target_id)
-                    if found then return found end
-                    return findNodeById(node.child2, target_id)
-                end
-                tree.selected = findNodeById(tree.root, tree_data.selected)
+        -- Clean up empty nodes after reconstruction
+        -- if tree.root then
+        --     tree.root = cleanupEmptyNodes(tree.root)
+        -- end
+        
+        -- Find the selected node by ID (after cleanup)
+        if tree_data.selected and tree.root then
+            local function findNodeById(node, target_id)
+                if not node then return nil end
+                if node.id == target_id then return node end
+                local found = findNodeById(node.child1, target_id)
+                if found then return found end
+                return findNodeById(node.child2, target_id)
             end
-            
-            -- Only add the tree if it has a valid root after cleanup
-            if tree.root then
-                obj.trees[space_id] = tree
-            end
+            tree.selected = findNodeById(tree.root, tree_data.selected)
+        end
+        
+        -- Only add the tree if it has a valid root after cleanup
+        if tree.root then
+            print("Adding tree for space: " .. space_id)
+            obj.trees[space_id] = tree
         else
-            print("Skipping layout for non-existent space: " .. space_id)
+            print("Tree has no valid root, skipping")
         end
     end
+    
+    -- print("=== LAYOUT BEFORE REFRESHING ===")
+    -- for space_id, tree in pairs(obj.trees) do
+    --     print("Space " .. space_id .. ":")
+    --     if tree.root then
+    --         obj:printTreeWindows(tree.root, 0)
+    --     else
+    --         print("  (empty tree - no valid windows found)")
+    --     end
+    -- end
+    -- print("=== END LAYOUT BEFORE REFRESHING ===")
 
-    obj:refreshTrees()
+    -- obj:refreshTrees()
     
     -- Apply layout to all loaded trees
     obj:applyAllLayouts()

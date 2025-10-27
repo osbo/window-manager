@@ -193,7 +193,7 @@ function obj:isWindowManageable(window)
     
     local appName = app:name()
     if hs.fnutils.contains({
-        "Raycast", "System Settings", "Spotlight", "Dock", "Control Center", "Notification Center"
+        "Raycast", "System Settings", "Spotlight", "Dock", "Control Center", "Notification Center", "Finder"
     }, appName) then
         return false
     end
@@ -245,8 +245,6 @@ function obj:setupWindowWatcher()
     self.windowWatcher:subscribe(hs.window.filter.windowDestroyed, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
         
-        -- 1. Mutate State
-            -- obj:closeWindow(window, nil)
         obj:refreshTrees()
         
         -- 2. Apply Layout (to reclaim the space)

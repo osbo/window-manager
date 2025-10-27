@@ -122,7 +122,7 @@ function obj:start()
 
     hs.window.animationDuration = 0.0
     self:setupWindowWatcher()
-    self:refreshTree() -- Reconciles state
+    self:refreshTrees() -- Reconciles state
 
     -- ADD THIS LINE:
     obj:applyAllLayouts() -- Apply any changes found during reconciliation
@@ -260,7 +260,7 @@ function obj:setupWindowWatcher()
         
         -- 1. Mutate State
             -- obj:closeWindow(window, nil)
-        obj:refreshTree()
+        obj:refreshTrees()
         
         -- 2. Apply Layout (to reclaim the space)
         obj:applyAllLayouts()
@@ -293,7 +293,7 @@ function obj:setupWindowWatcher()
         if obj:isWindowManageable(window) then
             -- 1. Mutate: Explicitly remove from management
             -- obj:closeWindow(window, nil)
-            obj:refreshTree()
+            obj:refreshTrees()
             -- 2. Apply Layout
             obj:applyLayout(tree.root)
         end
@@ -304,7 +304,7 @@ function obj:setupWindowWatcher()
         if obj:isWindowManageable(window) then
             -- 1. Mutate: Explicitly remove from management
             -- obj:closeWindow(window, nil)
-            obj:refreshTree()
+            obj:refreshTrees()
             -- 2. Apply Layout
             obj:applyLayout(tree.root)
         end
@@ -1018,7 +1018,7 @@ function obj:toggleShutdownRestart()
         obj.stopWM = false
         obj._eventListenersActive = true
         print("Window manager RESTARTED")
-        obj:refreshTree()
+        obj:refreshTrees()
         obj:applyAllLayouts()
         return true
     else
@@ -1212,8 +1212,6 @@ function obj:windowMovedHandler(window)
     local mouseButtons = hs.mouse.getButtons()
     if mouseButtons.left then
         print("User drag detected - allowing window to move freely")
-        -- Just refresh the tree to clean up any orphaned references
-        obj:refreshTree()
         return
     end
 
@@ -1456,7 +1454,7 @@ function obj:onSpaceChanged()
     -- print("Space changed.")
 
     -- 1. Reconcile state for the new space
-    obj:refreshTree()
+    obj:refreshTrees()
 
     -- 2. Apply layout for all trees (in case windows moved)
     obj:applyAllLayouts()
@@ -1701,62 +1699,24 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
     end
 end
 
-function obj:refreshTree()
-    -- Throttle refresh calls to prevent excessive calls
-    local currentTime = hs.timer.absoluteTime()
-    if obj.lastRefreshTime > 0 and (currentTime - obj.lastRefreshTime) < 1000000000 then -- 1 second in nanoseconds
-        -- print("Throttling refresh call - too soon since last refresh")
-        return
-    end
-    
-    -- Update lastRefreshTime
-    obj.lastRefreshTime = currentTime
-    
-    -- Prevent recursive calls
-    if obj._refreshing then
-        -- print("Already refreshing, skipping...")
-        return
-    end
-    
-    obj._refreshing = true
-    -- print("Refreshing tree")
-
-    local current_space = hs.spaces.focusedSpace()
-    obj.current_space = current_space
-    -- print("Current space: " .. current_space)
-
-    local tree = obj:getTreeForSpace(current_space)
-    local focused_screen_id = hs.screen.mainScreen():id()
-    
-    -- Save the list of windows on the screen as a local table
-    local windows_on_screen = {}
-    local all_windows = hs.window.orderedWindows()
-    for _, window in ipairs(all_windows) do
-        if obj:isWindowManageable(window) and window:screen():id() == focused_screen_id then
-            table.insert(windows_on_screen, window)
-        end
-    end
-    
-    -- Save the list of windows in the tree before making any changes
+function obj:refreshTree(tree, windows)
     local windows_in_tree = {}
     if tree.root then
         windows_in_tree = tree.root:getAllLeafWindows()
     end
-    
-    -- Create lookup tables for efficient comparison
+
     local screen_windows_by_id = {}
-    for _, window in ipairs(windows_on_screen) do
+    for _, window in ipairs(windows) do
         screen_windows_by_id[window:id()] = window
     end
-    
+
     local tree_windows_by_id = {}
     for _, window in ipairs(windows_in_tree) do
         tree_windows_by_id[window:id()] = window
     end
-    
-    -- Find windows to add (on screen but not in tree)
+
     local windows_to_add = {}
-    for _, window in ipairs(windows_on_screen) do
+    for _, window in ipairs(windows) do
         if not tree_windows_by_id[window:id()] then
             table.insert(windows_to_add, window)
         end
@@ -1793,20 +1753,55 @@ function obj:refreshTree()
             table.insert(windows_to_remove, window)
         end
     end
-    
-    -- print("Windows to add: " .. #windows_to_add)
-    -- print("Windows to remove: " .. #windows_to_remove)
-    
-    -- Remove windows first (to avoid conflicts)
+
     for _, window in ipairs(windows_to_remove) do
-        -- print("Removing stale window: " .. (window:title() or "Invalid"))
         obj:closeWindow(window, tree)
     end
-    
-    -- Add new windows
+
     for _, window in ipairs(windows_to_add) do
-        -- print("Adding new window: " .. window:title())
         obj:addNode(window, tree)
+    end
+end
+
+function obj:refreshTrees()
+    -- Throttle refresh calls to prevent excessive calls
+    local currentTime = hs.timer.absoluteTime()
+    if obj.lastRefreshTime > 0 and (currentTime - obj.lastRefreshTime) < 1000000000 then -- 1 second in nanoseconds
+        print("Throttling refresh call - too soon since last refresh")
+        return
+    end
+    
+    -- Update lastRefreshTime
+    obj.lastRefreshTime = currentTime
+    
+    -- Prevent recursive calls
+    if obj._refreshing then
+        print("Already refreshing, skipping...")
+        return
+    end
+    
+    obj._refreshing = true
+    print("Refreshing tree")
+
+    local active_windows_by_spaces = {}
+    local allWindows = hs.window.orderedWindows()
+
+    for _, window in ipairs(allWindows) do
+        if obj:isWindowManageable(window) then
+            local screen_id = window:screen():id()
+            local space_id = hs.spaces.activeSpaceOnScreen(screen_id)
+            if not active_windows_by_spaces[space_id] then
+                active_windows_by_spaces[space_id] = {}
+            end
+            table.insert(active_windows_by_spaces[space_id], window)
+        end
+    end
+
+    for space_id, windows in pairs(active_windows_by_spaces) do
+        local tree = obj:getTreeForSpace(space_id)
+        if tree then
+            obj:refreshTree(tree, windows)
+        end
     end
 
     -- Clear the refreshing flag
@@ -2124,7 +2119,7 @@ function obj:loadLayout()
         end
     end
 
-    obj:refreshTree()
+    obj:refreshTrees()
     
     -- Apply layout to all loaded trees
     obj:applyAllLayouts()

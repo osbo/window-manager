@@ -1012,9 +1012,14 @@ function obj:toggleShutdownRestart()
         -- Currently running, shutdown the system
         obj.stopWM = true
         obj._eventListenersActive = false
-        -- Delete all trees
-        obj.trees = {}
-        print("Window manager SHUTDOWN - all trees deleted")
+        -- Delete only the tree for the currently focused space
+        local focused_space = hs.spaces.focusedSpace()
+        if focused_space and obj.trees[focused_space] then
+            obj.trees[focused_space] = nil
+            print("Window manager SHUTDOWN - tree for space " .. focused_space .. " deleted")
+        else
+            print("Window manager SHUTDOWN - no tree found for focused space")
+        end
         return false
     end
 end
@@ -1895,6 +1900,151 @@ function obj:saveLayout()
     print("=== END LAYOUT BEFORE SAVING ===")
 end
 
+-- Helper function to reconstruct a node from saved data
+function obj:reconstructNode(node_data)
+    if not node_data then return nil end
+    
+    local node = {
+        id = node_data.id,
+        leaf = node_data.leaf,
+        position = node_data.position,
+        size = node_data.size,
+        split_type = node_data.split_type,
+        split_ratio = node_data.split_ratio,
+        windows = {},
+        child1 = nil,
+        child2 = nil,
+        parent = nil
+    }
+    
+    -- Set the metatable to give the node access to Node methods
+    setmetatable(node, Node)
+    
+    -- Reconstruct windows using improved matching logic
+    if node_data.windows then
+        for _, window_info in ipairs(node_data.windows) do
+            local appName = window_info.appName
+            local savedTitle = window_info.title
+            local savedId = window_info.id
+            local windowIndex = window_info.windowIndex
+            
+            print("Looking for window: " .. savedTitle .. " (ID: " .. savedId .. ", App: " .. appName .. ", Index: " .. tostring(windowIndex) .. ")")
+            
+            local window = nil
+            
+            -- Method 1: Try to find by window ID first (most reliable)
+            if savedId then
+                local success, allWindows = pcall(hs.window.allWindows)
+                if success and allWindows then
+                    for _, win in ipairs(allWindows) do
+                        local winId = win and win:id()
+                        if winId and winId == savedId then
+                            window = win
+                            print("Found window by ID: " .. (win:title() or "Unknown"))
+                            break
+                        end
+                    end
+                end
+            end
+            
+            -- Method 2: If not found by ID, try by application + title
+            if not window and appName and savedTitle then
+                local success, app = pcall(hs.application.get, appName)
+                if success and app then
+                    local success2, windows = pcall(app.allWindows, app)
+                    if success2 and windows then
+                        for _, win in ipairs(windows) do
+                            local winTitle = win and win:title()
+                            if winTitle and winTitle == savedTitle then
+                                window = win
+                                print("Found window by app+title: " .. winTitle)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            -- Method 3: If still not found, try by application + index (fallback)
+            if not window and appName and windowIndex then
+                local success, app = pcall(hs.application.get, appName)
+                if success and app then
+                    local success2, windows = pcall(app.allWindows, app)
+                    if success2 and windows and windows[windowIndex] then
+                        window = windows[windowIndex]
+                        local winTitle = window and window:title()
+                        print("Found window by app+index: " .. (winTitle or "Unknown"))
+                    end
+                end
+            end
+            
+            -- Method 4: If still not found, try to find any window from the same app
+            if not window and appName then
+                local success, app = pcall(hs.application.get, appName)
+                if success and app then
+                    local success2, windows = pcall(app.allWindows, app)
+                    if success2 and windows and #windows > 0 then
+                        window = windows[1] -- Take the first available window
+                        local winTitle = window and window:title()
+                        print("Found window by app only (first available): " .. (winTitle or "Unknown"))
+                    end
+                end
+            end
+            
+            if window then
+                table.insert(node.windows, window)
+                local winTitle = window and window:title()
+                print("Successfully reconstructed window: " .. (winTitle or "Unknown"))
+            else
+                print("Failed to reconstruct window: " .. (savedTitle or "Unknown") .. " from app: " .. (appName or "Unknown"))
+            end
+        end
+    end
+    
+    -- Reconstruct children
+    if node_data.child1 then
+        node.child1 = obj:reconstructNode(node_data.child1)
+        node.child1.parent = node
+    end
+    if node_data.child2 then
+        node.child2 = obj:reconstructNode(node_data.child2)
+        node.child2.parent = node
+    end
+    
+    return node
+end
+
+function obj:loadTree(space_id, tree_data)
+    print("Lazy loading tree for space: " .. space_id)
+    local tree = {
+        root = obj:reconstructNode(tree_data.root),
+        selected = nil
+    }
+    print("Tree: " .. hs.inspect(tree))
+    
+    -- Find the selected node by ID (after cleanup)
+    if tree_data.selected and tree.root then
+        local function findNodeById(node, target_id)
+            if not node then return nil end
+            if node.id == target_id then return node end
+            local found = findNodeById(node.child1, target_id)
+            if found then return found end
+            return findNodeById(node.child2, target_id)
+        end
+        tree.selected = findNodeById(tree.root, tree_data.selected)
+    end
+    
+    -- Only add the tree if it has a valid root after cleanup
+    if tree.root then
+        print("Successfully loaded tree for space: " .. space_id)
+        obj.trees[space_id] = tree
+        return true
+    else
+        print("Failed to load tree for space: " .. space_id .. " - no valid root")
+        return false
+    end
+end
+
 --- Loads the layout tree from a JSON file
 function obj:loadLayout()
     local file, err = io.open(obj.save_path, "r")
@@ -1912,212 +2062,31 @@ function obj:loadLayout()
     end
     
     local success, decoded_layout = pcall(hs.json.decode, content)
-    
+
     if not success or not decoded_layout then
         print("WindowManager: Failed to decode layout file. Starting fresh.")
         return
     end
 
-    -- Helper function to reconstruct a node from saved data
-    local function reconstructNode(node_data)
-        if not node_data then return nil end
-        
-        local node = {
-            id = node_data.id,
-            leaf = node_data.leaf,
-            position = node_data.position,
-            size = node_data.size,
-            split_type = node_data.split_type,
-            split_ratio = node_data.split_ratio,
-            windows = {},
-            child1 = nil,
-            child2 = nil,
-            parent = nil
-        }
-        
-        -- Set the metatable to give the node access to Node methods
-        setmetatable(node, Node)
-        
-        -- Reconstruct windows using improved matching logic
-        if node_data.windows then
-            for _, window_info in ipairs(node_data.windows) do
-                local appName = window_info.appName
-                local savedTitle = window_info.title
-                local savedId = window_info.id
-                local windowIndex = window_info.windowIndex
-                
-                print("Looking for window: " .. savedTitle .. " (ID: " .. savedId .. ", App: " .. appName .. ", Index: " .. tostring(windowIndex) .. ")")
-                
-                local window = nil
-                
-                -- Method 1: Try to find by window ID first (most reliable)
-                if savedId then
-                    local success, allWindows = pcall(hs.window.allWindows)
-                    if success and allWindows then
-                        for _, win in ipairs(allWindows) do
-                            local winId = win and win:id()
-                            if winId and winId == savedId then
-                                window = win
-                                print("Found window by ID: " .. (win:title() or "Unknown"))
-                                break
-                            end
-                        end
-                    end
-                end
-                
-                -- Method 2: If not found by ID, try by application + title
-                if not window and appName and savedTitle then
-                    local success, app = pcall(hs.application.get, appName)
-                    if success and app then
-                        local success2, windows = pcall(app.allWindows, app)
-                        if success2 and windows then
-                            for _, win in ipairs(windows) do
-                                local winTitle = win and win:title()
-                                if winTitle and winTitle == savedTitle then
-                                    window = win
-                                    print("Found window by app+title: " .. winTitle)
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                -- Method 3: If still not found, try by application + index (fallback)
-                if not window and appName and windowIndex then
-                    local success, app = pcall(hs.application.get, appName)
-                    if success and app then
-                        local success2, windows = pcall(app.allWindows, app)
-                        if success2 and windows and windows[windowIndex] then
-                            window = windows[windowIndex]
-                            local winTitle = window and window:title()
-                            print("Found window by app+index: " .. (winTitle or "Unknown"))
-                        end
-                    end
-                end
-                
-                -- Method 4: If still not found, try to find any window from the same app
-                if not window and appName then
-                    local success, app = pcall(hs.application.get, appName)
-                    if success and app then
-                        local success2, windows = pcall(app.allWindows, app)
-                        if success2 and windows and #windows > 0 then
-                            window = windows[1] -- Take the first available window
-                            local winTitle = window and window:title()
-                            print("Found window by app only (first available): " .. (winTitle or "Unknown"))
-                        end
-                    end
-                end
-                
-                if window then
-                    table.insert(node.windows, window)
-                    local winTitle = window and window:title()
-                    print("Successfully reconstructed window: " .. (winTitle or "Unknown"))
-                else
-                    print("Failed to reconstruct window: " .. (savedTitle or "Unknown") .. " from app: " .. (appName or "Unknown"))
-                end
-            end
-        end
-        
-        -- Reconstruct children
-        if node_data.child1 then
-            node.child1 = reconstructNode(node_data.child1)
-            node.child1.parent = node
-        end
-        if node_data.child2 then
-            node.child2 = reconstructNode(node_data.child2)
-            node.child2.parent = node
-        end
-        
-        return node
+    local activeSpaces = hs.spaces.activeSpaces()
+    local currentSpaces = {}
+    for space_id, space in pairs(activeSpaces) do
+        currentSpaces[space] = true
     end
-    
-    -- Helper function to clean up empty leaf nodes
-    -- local function cleanupEmptyNodes(node)
-    --     if not node then return nil end
-        
-    --     if node.leaf then
-    --         -- If this is a leaf node with no windows, return nil to remove it
-    --         if #node.windows == 0 then
-    --             return nil
-    --         end
-    --         return node
-    --     else
-    --         -- This is an internal node, clean up children first
-    --         if node.child1 then
-    --             node.child1 = cleanupEmptyNodes(node.child1)
-    --         end
-    --         if node.child2 then
-    --             node.child2 = cleanupEmptyNodes(node.child2)
-    --         end
-            
-    --         -- If both children are now nil, this internal node should be removed
-    --         if not node.child1 and not node.child2 then
-    --             return nil
-    --         end
-            
-    --         -- If only one child remains, promote it to replace this node
-    --         if not node.child1 and node.child2 then
-    --             node.child2.parent = node.parent
-    --             return node.child2
-    --         elseif node.child1 and not node.child2 then
-    --             node.child1.parent = node.parent
-    --             return node.child1
-    --         end
-            
-    --         return node
-    --     end
-    -- end
 
     -- Clear existing trees and load the saved ones
     obj.trees = {}
     for space_id_str, tree_data in pairs(decoded_layout) do
         local space_id = tonumber(space_id_str)
-        print("Loading tree for space: " .. space_id)
-        local tree = {
-            root = reconstructNode(tree_data.root),
-            selected = nil
-        }
-        print("Tree: " .. hs.inspect(tree))
-        
-        -- Clean up empty nodes after reconstruction
-        -- if tree.root then
-        --     tree.root = cleanupEmptyNodes(tree.root)
-        -- end
-        
-        -- Find the selected node by ID (after cleanup)
-        if tree_data.selected and tree.root then
-            local function findNodeById(node, target_id)
-                if not node then return nil end
-                if node.id == target_id then return node end
-                local found = findNodeById(node.child1, target_id)
-                if found then return found end
-                return findNodeById(node.child2, target_id)
+        if currentSpaces[space_id] then
+            local success = obj:loadTree(space_id, tree_data)
+            if not success then
+                print("Failed to load tree for space: " .. space_id)
             end
-            tree.selected = findNodeById(tree.root, tree_data.selected)
-        end
-        
-        -- Only add the tree if it has a valid root after cleanup
-        if tree.root then
-            print("Adding tree for space: " .. space_id)
-            obj.trees[space_id] = tree
         else
-            print("Tree has no valid root, skipping")
+            print("Space " .. space_id .. " not active, skipping")
         end
     end
-    
-    -- print("=== LAYOUT BEFORE REFRESHING ===")
-    -- for space_id, tree in pairs(obj.trees) do
-    --     print("Space " .. space_id .. ":")
-    --     if tree.root then
-    --         obj:printTreeWindows(tree.root, 0)
-    --     else
-    --         print("  (empty tree - no valid windows found)")
-    --     end
-    -- end
-    -- print("=== END LAYOUT BEFORE REFRESHING ===")
-
-    -- obj:refreshTrees()
     
     -- Apply layout to all loaded trees
     obj:applyAllLayouts()

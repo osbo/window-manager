@@ -122,6 +122,7 @@ function obj:start()
 
     hs.window.animationDuration = 0.0
     self:setupWindowWatcher()
+    self:setupApplicationWatcher()
     self:refreshTrees() -- Reconciles state
 
     -- ADD THIS LINE:
@@ -152,6 +153,12 @@ function obj:stop()
     if self.windowWatcher then
         self.windowWatcher:delete()
         self.windowWatcher = nil
+    end
+    
+    -- Stop and remove the application watcher
+    if self.applicationWatcher then
+        self.applicationWatcher:stop()
+        self.applicationWatcher = nil
     end
     
     -- Stop and remove the sleep watcher
@@ -275,7 +282,7 @@ function obj:setupWindowWatcher()
         -- obj:closeWindow(window, nil)
         obj:refreshTrees()
         -- 2. Apply Layout
-        obj:applyLayout(tree.root)
+        obj:applyAllLayouts()
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowHidden, function(window)
@@ -285,7 +292,7 @@ function obj:setupWindowWatcher()
         -- obj:closeWindow(window, nil)
         obj:refreshTrees()
         -- 2. Apply Layout
-        obj:applyLayout(tree.root)
+        obj:applyAllLayouts()
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowUnminimized, function(window)
@@ -309,6 +316,21 @@ function obj:setupWindowWatcher()
         -- 2. Apply Layout
         obj:applyLayout(tree.root)
     end)
+end
+
+-- Set up application watcher
+function obj:setupApplicationWatcher()
+    self.applicationWatcher = hs.application.watcher.new(function(appName, eventType, app)
+        if not obj._eventListenersActive or obj.stopWM then return end
+        
+        if eventType == hs.application.watcher.terminated then
+            -- Application terminated - refresh trees to clean up invalid windows
+            obj:refreshTrees()
+            obj:applyAllLayouts()
+        end
+    end)
+    
+    self.applicationWatcher:start()
 end
 
 function obj:getTreeForSpace(space_id)
@@ -490,7 +512,7 @@ function obj:focusNeighbor(direction)
     
     local neighborNode = obj:findNeighbor(currentWindow, direction)
     if neighborNode and neighborNode.windows and neighborNode.windows[1] then
-        local neighborWindow = neighborNode.windows[#neighborNode.windows]
+        local neighborWindow = neighborNode.windows[1]
         neighborWindow:focus()
         
         -- Center the mouse position in the focused window

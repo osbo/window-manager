@@ -193,7 +193,7 @@ function obj:isWindowManageable(window)
     
     local appName = app:name()
     if hs.fnutils.contains({
-        "Raycast", "System Settings", "Spotlight", "Dock", "Control Center", "Notification Center", "Finder"
+        "Raycast", "System Settings", "Spotlight", "Dock", "Control Center", "Notification Center", "Finder", "FaceTime"
     }, appName) then
         return false
     end
@@ -230,7 +230,8 @@ function obj:setupWindowWatcher()
 
     self.windowWatcher:subscribe(hs.window.filter.windowFocused, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
-        
+        if not obj:isWindowManageable(window) then return end
+
         local space_id, tree = obj:getTreeForWindow(window)
         if tree and tree.root then
             local node = tree.root:findNode(window)
@@ -244,6 +245,7 @@ function obj:setupWindowWatcher()
 
     self.windowWatcher:subscribe(hs.window.filter.windowDestroyed, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
+        if not obj:isWindowManageable(window) then return end
         
         obj:refreshTrees()
         
@@ -254,16 +256,9 @@ function obj:setupWindowWatcher()
     -- This listener is already fixed by Step 1 (adding obj._applyingLayout check)
     self.windowWatcher:subscribe(hs.window.filter.windowMoved, function(window)
         if not obj._eventListenersActive or obj.stopWM or obj._applyingLayout then return end
-        if obj:isWindowManageable(window) then
-            obj:windowMovedHandler(window)
-        end
+        if not obj:isWindowManageable(window) then return end
+        obj:windowMovedHandler(window)
     end)
-
-    -- REMOVE THESE LISTENERS. They are vague and are likely
-    -- contributing to your refresh loops. The other, more specific
-    -- listeners handle these cases better.
-    -- self.windowWatcher:subscribe(hs.window.filter.windowInCurrentSpace, ...)
-    -- self.windowWatcher:subscribe(hs.window.filter.windowNotInCurrentSpace, ...)
 
     -- Handle window maximization - (no change, this is fine)
     self.windowWatcher:subscribe(hs.window.filter.windowFullscreened, function(window)
@@ -275,48 +270,44 @@ function obj:setupWindowWatcher()
     -- FIX for minimized/hidden windows causing loops
     self.windowWatcher:subscribe(hs.window.filter.windowMinimized, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
-        if obj:isWindowManageable(window) then
-            -- 1. Mutate: Explicitly remove from management
-            -- obj:closeWindow(window, nil)
-            obj:refreshTrees()
-            -- 2. Apply Layout
-            obj:applyLayout(tree.root)
-        end
+        if not obj:isWindowManageable(window) then return end
+        -- 1. Mutate: Explicitly remove from management
+        -- obj:closeWindow(window, nil)
+        obj:refreshTrees()
+        -- 2. Apply Layout
+        obj:applyLayout(tree.root)
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowHidden, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
-        if obj:isWindowManageable(window) then
-            -- 1. Mutate: Explicitly remove from management
-            -- obj:closeWindow(window, nil)
-            obj:refreshTrees()
-            -- 2. Apply Layout
-            obj:applyLayout(tree.root)
-        end
+        if not obj:isWindowManageable(window) then return end
+        -- 1. Mutate: Explicitly remove from management
+        -- obj:closeWindow(window, nil)
+        obj:refreshTrees()
+        -- 2. Apply Layout
+        obj:applyLayout(tree.root)
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowUnminimized, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
-        if obj:isWindowManageable(window) then
-            -- 1. Mutate: Explicitly add back to management
-            local space_id = hs.spaces.focusedSpace()
-            local tree = obj:getTreeForSpace(space_id)
-            obj:addNode(window, tree)
-            -- 2. Apply Layout
-            obj:applyLayout(tree.root)
-        end
+        if not obj:isWindowManageable(window) then return end
+        -- 1. Mutate: Explicitly add back to management
+        local space_id = hs.spaces.focusedSpace()
+        local tree = obj:getTreeForSpace(space_id)
+        obj:addNode(window, tree)
+        -- 2. Apply Layout
+        obj:applyLayout(tree.root)
     end)
 
     self.windowWatcher:subscribe(hs.window.filter.windowUnhidden, function(window)
         if not obj._eventListenersActive or obj.stopWM then return end
-        if obj:isWindowManageable(window) then
-            -- 1. Mutate: Explicitly add back to management
-            local space_id = hs.spaces.focusedSpace()
-            local tree = obj:getTreeForSpace(space_id)
-            obj:addNode(window, tree)
-            -- 2. Apply Layout
-            obj:applyLayout(tree.root)
-        end
+        if not obj:isWindowManageable(window) then return end
+        -- 1. Mutate: Explicitly add back to management
+        local space_id = hs.spaces.focusedSpace()
+        local tree = obj:getTreeForSpace(space_id)
+        obj:addNode(window, tree)
+        -- 2. Apply Layout
+        obj:applyLayout(tree.root)
     end)
 end
 
@@ -1479,21 +1470,30 @@ function obj:applyLayout(node)
             w = node.size.w,
             h = node.size.h
         }
+        
+        -- Safety check: if node has no windows, it's an empty leaf node - this is safe
+        if not node.windows or #node.windows == 0 then
+            -- Empty leaf node - this is normal and safe, just return
+            return
+        end
+        
         for _, win in ipairs(node.windows) do
-            -- FIX: Add pcall for safety, window might be invalid
-            pcall(function() 
-                win:setFrame(frame)
-                -- Update position tracking after system move
-                local windowId = win:id()
-                if windowId then
-                    obj._lastWindowPositions[windowId] = {
-                        x = frame.x,
-                        y = frame.y,
-                        w = frame.w,
-                        h = frame.h
-                    }
-                end
-            end)
+            if obj:isWindowManageable(win) then
+                -- FIX: Add pcall for safety, window might be invalid
+                pcall(function() 
+                    win:setFrame(frame)
+                    -- Update position tracking after system move
+                    local windowId = win:id()
+                    if windowId then
+                        obj._lastWindowPositions[windowId] = {
+                            x = frame.x,
+                            y = frame.y,
+                            w = frame.w,
+                            h = frame.h
+                        }
+                    end
+                end)
+            end
         end
     end
 end
@@ -1628,7 +1628,15 @@ end
 
 function obj:collapseNode(tree, node) -- NEW: Takes tree and node
     if not node.parent then
-        print("Error: Node to collapse has no parent.")
+        -- This is a root node that became empty - reset it to empty leaf state
+        print("Root node became empty, resetting to empty leaf state")
+        node.leaf = true
+        node.windows = {}
+        node.child1 = nil
+        node.child2 = nil
+        node.split_type = nil
+        node.split_ratio = nil
+        tree.selected = node
         return
     end
     

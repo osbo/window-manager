@@ -559,9 +559,9 @@ function obj:nextWindow()
     local wasRefreshing = obj._refreshing
     obj._refreshing = true
     
-    -- Rotate the windows table: move the last window to the front
-    local lastWindow = table.remove(node.windows)
-    table.insert(node.windows, 1, lastWindow)
+    -- Rotate the windows table: move the front window to the back
+    local frontWindow = table.remove(node.windows, 1)
+    table.insert(node.windows, frontWindow)
     
     -- Focus the new front window
     node.windows[1]:focus()
@@ -1123,7 +1123,7 @@ function obj:explodeNode()
     local firstWindow = windowsToSplit[1]
     node.windows = {firstWindow}
     
-    -- Add each remaining window as a new node (in reverse order)
+    -- Add each remaining window as a new node
     for i = 2, #windowsToSplit do
         local window = windowsToSplit[i]
         -- print("Adding window as new node: " .. window:title())
@@ -1545,14 +1545,14 @@ function obj:addNode(window, tree, child, split_type)
     
     -- Case 1: Empty root
     if tree.root.leaf and #tree.root.windows == 0 then
-        table.insert(tree.root.windows, window)
+        table.insert(tree.root.windows, 1, window)
         tree.selected = tree.root
         return
     end
     
     -- Case 2: Empty selected leaf
     if tree.selected and tree.selected.leaf and #tree.selected.windows == 0 then
-        table.insert(tree.selected.windows, window)
+        table.insert(tree.selected.windows, 1, window)
         return
     end
     
@@ -1597,10 +1597,10 @@ function obj:addWindowToStack(window, tree)
     if not window or not window:id() then return end
     if not tree or not tree.selected then return end
     
-    -- Add window to the selected node's windows table (at the end for frontmost)
-    table.insert(tree.selected.windows, window)
+    -- Add window to the front of the stack (first position for frontmost)
+    table.insert(tree.selected.windows, 1, window)
     
-    -- print("Added window to stack: " .. window:title() .. " (index " .. #tree.selected.windows .. ")")
+    -- print("Added window to stack: " .. window:title() .. " (index 1)")
 end
 
 function obj:closeWindow(window, optionalTree)

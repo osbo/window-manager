@@ -114,11 +114,18 @@ function Node:getAllLeafWindows()
 end
 
 -- Start the spoon
-function obj:start()
+function obj:start(persistLayout)
     -- print("WindowManager: Starting")
     
-    -- Load the previous layout FIRST
-    obj:loadLayout()
+    -- Default persistLayout to true for backward compatibility
+    if persistLayout == nil then
+        persistLayout = false
+    end
+    
+    -- Load the previous layout FIRST (only if persistence is enabled)
+    if persistLayout then
+        obj:loadLayout()
+    end
 
     hs.window.animationDuration = 0.0
     self:setupWindowWatcher()
@@ -128,20 +135,22 @@ function obj:start()
     -- ADD THIS LINE:
     obj:applyAllLayouts() -- Apply any changes found during reconciliation
     
-    -- Initialize and start the sleep watcher
-    obj.caffeinateWatcher = hs.caffeinate.watcher.new(function(event)
-        if event == hs.caffeinate.watcher.screensDidSleep then
-            -- print("WindowManager: Screens going to sleep - saving layout")
-            obj:saveLayout()
-        elseif event == hs.caffeinate.watcher.screensDidWake then
-            -- print("WindowManager: Screens waking up - loading layout")
-            -- Wait longer for spaces and windows to settle
-            hs.timer.doAfter(3, function()
-                obj:loadLayout()
-            end)
-        end
-    end)
-    obj.caffeinateWatcher:start()
+    -- Initialize and start the sleep watcher (only if persistence is enabled)
+    if persistLayout then
+        obj.caffeinateWatcher = hs.caffeinate.watcher.new(function(event)
+            if event == hs.caffeinate.watcher.screensDidSleep then
+                -- print("WindowManager: Screens going to sleep - saving layout")
+                obj:saveLayout()
+            elseif event == hs.caffeinate.watcher.screensDidWake then
+                -- print("WindowManager: Screens waking up - loading layout")
+                -- Wait longer for spaces and windows to settle
+                hs.timer.doAfter(3, function()
+                    obj:loadLayout()
+                end)
+            end
+        end)
+        obj.caffeinateWatcher:start()
+    end
     
     return self
 end
@@ -161,14 +170,17 @@ function obj:stop()
         self.applicationWatcher = nil
     end
     
+    -- Save the layout one last time on stop/reload (only if persistence was enabled)
+    -- Check if caffeinateWatcher exists before stopping it (indicates persistence was enabled)
+    if obj.caffeinateWatcher then
+        obj:saveLayout()
+    end
+    
     -- Stop and remove the sleep watcher
     if obj.caffeinateWatcher then
         obj.caffeinateWatcher:stop()
         obj.caffeinateWatcher = nil
     end
-    
-    -- Save the layout one last time on stop/reload
-    obj:saveLayout()
     
     return self
 end
@@ -239,25 +251,19 @@ function obj:setupWindowWatcher()
         if not obj._eventListenersActive or obj.stopWM then return end
         if not obj:isWindowManageable(window) then return end
 
+        -- Refresh trees to catch any changes (windows closed, minimized, etc.)
+        obj:refreshTrees()
+        
         local space_id, tree = obj:getTreeForWindow(window)
         if tree and tree.root then
             local node = tree.root:findNode(window)
             if node then
                 tree.selected = node
-                obj:applyLayout(node)
             end
+            -- Apply layout to the focused tree
+            obj:applyLayout(tree.root)
             obj:printTreeWindows(tree.root, 0)
         end
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowDestroyed, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        if not obj:isWindowManageable(window) then return end
-        
-        obj:refreshTrees()
-        
-        -- 2. Apply Layout (to reclaim the space)
-        obj:applyAllLayouts()
     end)
 
     -- This listener is already fixed by Step 1 (adding obj._applyingLayout check)
@@ -267,70 +273,11 @@ function obj:setupWindowWatcher()
         obj:windowMovedHandler(window)
     end)
 
-    -- Handle window maximization - (no change, this is fine)
-    self.windowWatcher:subscribe(hs.window.filter.windowFullscreened, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        -- print("Window maximized: " .. window:title())
-        -- Maximized windows create their own space, no special handling needed
-    end)
-
-    -- FIX for minimized/hidden windows causing loops
-    self.windowWatcher:subscribe(hs.window.filter.windowMinimized, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        if not obj:isWindowManageable(window) then return end
-        -- 1. Mutate: Explicitly remove from management
-        -- obj:closeWindow(window, nil)
-        obj:refreshTrees()
-        -- 2. Apply Layout
-        obj:applyAllLayouts()
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowHidden, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        if not obj:isWindowManageable(window) then return end
-        -- 1. Mutate: Explicitly remove from management
-        -- obj:closeWindow(window, nil)
-        obj:refreshTrees()
-        -- 2. Apply Layout
-        obj:applyAllLayouts()
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowUnminimized, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        if not obj:isWindowManageable(window) then return end
-        -- 1. Mutate: Explicitly add back to management
-        local space_id = hs.spaces.focusedSpace()
-        local tree = obj:getTreeForSpace(space_id)
-        obj:addNode(window, tree)
-        -- 2. Apply Layout
-        obj:applyLayout(tree.root)
-    end)
-
-    self.windowWatcher:subscribe(hs.window.filter.windowUnhidden, function(window)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        if not obj:isWindowManageable(window) then return end
-        -- 1. Mutate: Explicitly add back to management
-        local space_id = hs.spaces.focusedSpace()
-        local tree = obj:getTreeForSpace(space_id)
-        obj:addNode(window, tree)
-        -- 2. Apply Layout
-        obj:applyLayout(tree.root)
-    end)
 end
 
--- Set up application watcher
+-- Set up application watcher (removed - using window focus handler instead)
 function obj:setupApplicationWatcher()
-    self.applicationWatcher = hs.application.watcher.new(function(appName, eventType, app)
-        if not obj._eventListenersActive or obj.stopWM then return end
-        
-        if eventType == hs.application.watcher.terminated then
-            -- Application terminated - refresh trees to clean up invalid windows
-            obj:refreshTrees()
-            obj:applyAllLayouts()
-        end
-    end)
-    
-    self.applicationWatcher:start()
+    -- Application watcher removed - window state changes are handled via windowFocused
 end
 
 function obj:getTreeForSpace(space_id)
@@ -1703,7 +1650,87 @@ function obj:collapseNode(tree, node) -- NEW: Takes tree and node
     end
 end
 
-function obj:refreshTree(tree, windows)
+-- Recursively find and collapse all empty leaf nodes in a single tree
+function obj:cleanupEmptyNodesInTree(tree)
+    if not tree or not tree.root then return false end
+    
+    local changed = true
+    local iterations = 0
+    local max_iterations = 10  -- Safety limit to prevent infinite loops
+    
+    -- Keep cleaning until no more changes
+    while changed and iterations < max_iterations do
+        changed = false
+        iterations = iterations + 1
+        
+        -- Recursively process all nodes
+        local function processNode(node)
+            if not node then return false end
+            
+            local nodeChanged = false
+            
+            if not node.leaf then
+                -- Internal node: recurse into children first
+                if node.child1 then
+                    nodeChanged = processNode(node.child1) or nodeChanged
+                end
+                if node.child2 then
+                    nodeChanged = processNode(node.child2) or nodeChanged
+                end
+            else
+                -- Leaf node: remove invalid windows first
+                if node.windows then
+                    local valid_windows = {}
+                    for _, win in ipairs(node.windows) do
+                        if win then
+                            -- Safely check if window is still valid
+                            local success, id = pcall(function() return win:id() end)
+                            if success and id then
+                                -- Try to access a property to verify window is still valid
+                                local screenSuccess = pcall(function() return win:screen() end)
+                                if screenSuccess then
+                                    table.insert(valid_windows, win)
+                                end
+                            end
+                        end
+                    end
+                    if #valid_windows ~= #node.windows then
+                        node.windows = valid_windows
+                        nodeChanged = true
+                    end
+                end
+                
+                -- If node is now empty, collapse it
+                if not node.windows or #node.windows == 0 then
+                    if node.parent or (tree.root == node) then
+                        obj:collapseNode(tree, node)
+                        nodeChanged = true
+                    end
+                end
+            end
+            
+            return nodeChanged
+        end
+        
+        changed = processNode(tree.root) or changed
+    end
+    
+    return changed
+end
+
+-- Clean up empty nodes in all trees (wrapper for backward compatibility)
+function obj:cleanupEmptyNodes()
+    local anyChanged = false
+    for space_id, tree in pairs(obj.trees) do
+        if tree and tree.root then
+            local changed = obj:cleanupEmptyNodesInTree(tree)
+            anyChanged = anyChanged or changed
+        end
+    end
+    return anyChanged
+end
+
+function obj:refreshTree(tree, windows, space_id)
     local windows_in_tree = {}
     if tree.root then
         windows_in_tree = tree.root:getAllLeafWindows()
@@ -1711,28 +1738,47 @@ function obj:refreshTree(tree, windows)
 
     local screen_windows_by_id = {}
     for _, window in ipairs(windows) do
-        screen_windows_by_id[window:id()] = window
+        local id_success, window_id = pcall(function() return window:id() end)
+        if id_success and window_id then
+            screen_windows_by_id[window_id] = window
+        end
     end
 
     local tree_windows_by_id = {}
     for _, window in ipairs(windows_in_tree) do
-        tree_windows_by_id[window:id()] = window
+        local id_success, window_id = pcall(function() return window:id() end)
+        if id_success and window_id then
+            tree_windows_by_id[window_id] = window
+        end
     end
 
     local windows_to_add = {}
     for _, window in ipairs(windows) do
-        if not tree_windows_by_id[window:id()] then
+        local id_success, window_id = pcall(function() return window:id() end)
+        if id_success and window_id and not tree_windows_by_id[window_id] then
             table.insert(windows_to_add, window)
         end
     end
     
-    -- Find windows to remove (in tree but not on screen or not manageable)
+    -- Find windows to remove (in tree but not in the provided window list, not manageable, or on wrong space)
     local windows_to_remove = {}
     local seen_window_ids = {} -- Track window IDs to detect duplicates
     
+    -- Get the screen for this space to validate window locations
+    local space_screen = nil
+    if space_id then
+        space_screen = obj:getScreenForSpace(space_id)
+    end
+    
     for _, window in ipairs(windows_in_tree) do
         local should_remove = false
-        local window_id = window:id()
+        
+        -- Safely get window ID - if we can't, trust previous state and skip
+        local id_success, window_id = pcall(function() return window:id() end)
+        if not id_success or not window_id then
+            -- Can't get window ID - trust previous state, let cleanup handle invalid refs
+            goto continue
+        end
         
         -- Check if this window ID has been seen before (duplicate detection)
         if seen_window_ids[window_id] then
@@ -1741,14 +1787,10 @@ function obj:refreshTree(tree, windows)
             -- Mark this window ID as seen
             seen_window_ids[window_id] = true
             
-            -- Check if window is no longer manageable
-            if not obj:isWindowManageable(window) then
-                should_remove = true
-            -- Check if window is not on the current screen
-            elseif window:screen():id() ~= focused_screen_id then
-                should_remove = true
-            -- Check if window is not in the current window list
-            elseif not screen_windows_by_id[window_id] then
+            -- Only remove if window is clearly not in the current window list for this space
+            -- Don't call isWindowManageable here as it may fail on invalid windows
+            -- Trust that if it's in the current list, it's valid
+            if not screen_windows_by_id[window_id] then
                 should_remove = true
             end
         end
@@ -1756,6 +1798,8 @@ function obj:refreshTree(tree, windows)
         if should_remove then
             table.insert(windows_to_remove, window)
         end
+        
+        ::continue::
     end
 
     for _, window in ipairs(windows_to_remove) do
@@ -1764,6 +1808,11 @@ function obj:refreshTree(tree, windows)
 
     for _, window in ipairs(windows_to_add) do
         obj:addNode(window, tree)
+    end
+    
+    -- Final cleanup pass: remove any invalid window references and collapse empty nodes
+    if tree.root then
+        obj:cleanupEmptyNodesInTree(tree)
     end
 end
 
@@ -1789,22 +1838,54 @@ function obj:refreshTrees()
 
     local active_windows_by_spaces = {}
     local allWindows = hs.window.orderedWindows()
-
-    for _, window in ipairs(allWindows) do
-        if obj:isWindowManageable(window) then
-            local screen_id = window:screen():id()
-            local space_id = hs.spaces.activeSpaceOnScreen(screen_id)
-            if not active_windows_by_spaces[space_id] then
-                active_windows_by_spaces[space_id] = {}
-            end
-            table.insert(active_windows_by_spaces[space_id], window)
-        end
+    
+    -- Get all active spaces (mapping space_id -> screen_id)
+    local activeSpaces = hs.spaces.activeSpaces()
+    local space_by_screen = {} -- Map screen_id -> space_id for active spaces
+    for space_id, screen_id in pairs(activeSpaces) do
+        space_by_screen[screen_id] = space_id
     end
 
+    -- Group windows by the active space on their screen
+    for _, window in ipairs(allWindows) do
+        -- Safely check if window is manageable - if it fails, skip it (trust previous state)
+        local manageable_success, is_manageable = pcall(function() return obj:isWindowManageable(window) end)
+        if manageable_success and is_manageable then
+            local success, window_screen = pcall(function() return window:screen() end)
+            if success and window_screen then
+                local screen_id = window_screen:id()
+                -- Use the active space on this window's screen
+                local window_space = space_by_screen[screen_id]
+                
+                -- Fallback: if screen not in active spaces, get active space directly
+                if not window_space then
+                    window_space = hs.spaces.activeSpaceOnScreen(screen_id)
+                end
+                
+                if window_space then
+                    if not active_windows_by_spaces[window_space] then
+                        active_windows_by_spaces[window_space] = {}
+                    end
+                    table.insert(active_windows_by_spaces[window_space], window)
+                end
+            end
+        end
+        -- If isWindowManageable fails or returns false, skip this window - trust previous state
+    end
+
+    -- Only refresh trees for spaces that have active windows or exist in our tree collection
     for space_id, windows in pairs(active_windows_by_spaces) do
         local tree = obj:getTreeForSpace(space_id)
         if tree then
-            obj:refreshTree(tree, windows)
+            obj:refreshTree(tree, windows, space_id)
+        end
+    end
+    
+    -- Also refresh any existing trees that don't have windows (to clean up)
+    for space_id, tree in pairs(obj.trees) do
+        if tree and not active_windows_by_spaces[space_id] then
+            -- This space has no active windows, refresh with empty list to clean up
+            obj:refreshTree(tree, {}, space_id)
         end
     end
 
@@ -2135,3 +2216,4 @@ function obj:loadLayout()
 end
 
 return obj
+

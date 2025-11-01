@@ -60,6 +60,8 @@ end
     obj.trees = {} -- Array: [space_id] = { root = node, selected = node }
     obj._eventListenersActive = true -- Flag to control event listener activity
     obj.stopWM = false -- Dedicated flag to completely stop window manager functionality
+    obj.stoppedFromCommand = false -- Track if stopped by manual command (Hyper+Y)
+    obj.stoppedFromScreens = false -- Track if stopped by screen count (onlyMultiScreen)
     obj._lastWindowPositions = {} -- Track window positions to detect user vs system moves
     obj.lastMoveTime = 0 -- Track last window move time using absoluteTime for throttling
     obj.lastRefreshTime = 0 -- Track last refresh time using absoluteTime for throttling
@@ -114,12 +116,29 @@ function Node:getAllLeafWindows()
 end
 
 -- Start the spoon
-function obj:start(persistLayout)
+function obj:start(persistLayout, onlyMultiScreen)
     -- print("WindowManager: Starting")
     
-    -- Default persistLayout to true for backward compatibility
+    -- Default persistLayout to false
     if persistLayout == nil then
         persistLayout = false
+    end
+    
+    -- Default onlyMultiScreen to true
+    if onlyMultiScreen == nil then
+        onlyMultiScreen = true
+    end
+    
+    obj.onlyMultiScreen = onlyMultiScreen
+    
+    -- Check screen count and disable if only one screen (if onlyMultiScreen is enabled)
+    if onlyMultiScreen then
+        local screens = hs.screen.allScreens()
+        if #screens <= 1 then
+            print("WindowManager: Only one screen detected, disabling window manager")
+            obj.stoppedFromScreens = true
+            obj:updateStopState()
+        end
     end
     
     -- Load the previous layout FIRST (only if persistence is enabled)
@@ -130,6 +149,12 @@ function obj:start(persistLayout)
     hs.window.animationDuration = 0.0
     self:setupWindowWatcher()
     self:setupApplicationWatcher()
+    
+    -- Set up screen watcher (only if onlyMultiScreen is enabled)
+    if onlyMultiScreen then
+        self:setupScreenWatcher()
+    end
+    
     self:refreshTrees() -- Reconciles state
 
     -- ADD THIS LINE:
@@ -168,6 +193,12 @@ function obj:stop()
     if self.applicationWatcher then
         self.applicationWatcher:stop()
         self.applicationWatcher = nil
+    end
+    
+    -- Stop and remove the screen watcher
+    if obj.screenWatcher then
+        obj.screenWatcher:stop()
+        obj.screenWatcher = nil
     end
     
     -- Save the layout one last time on stop/reload (only if persistence was enabled)
@@ -278,6 +309,68 @@ end
 -- Set up application watcher (removed - using window focus handler instead)
 function obj:setupApplicationWatcher()
     -- Application watcher removed - window state changes are handled via windowFocused
+end
+
+-- Update stopWM and _eventListenersActive based on tracked states
+function obj:updateStopState()
+    local shouldStop = obj.stoppedFromCommand or obj.stoppedFromScreens
+    local wasStopped = obj.stopWM
+    
+    obj.stopWM = shouldStop
+    obj._eventListenersActive = not shouldStop
+    
+    -- Only perform actions if state actually changed
+    if not wasStopped and shouldStop then
+        -- Just stopped - clear trees for the currently focused space
+        local focused_space = hs.spaces.focusedSpace()
+        if focused_space and obj.trees[focused_space] then
+            obj.trees[focused_space] = nil
+        end
+    elseif wasStopped and not shouldStop then
+        -- Just restarted - refresh trees and apply layouts
+        obj:refreshTrees()
+        obj:applyAllLayouts()
+    end
+end
+
+-- Set up screen watcher to monitor screen count changes
+function obj:setupScreenWatcher()
+    if obj.screenWatcher then
+        obj.screenWatcher:stop()
+        obj.screenWatcher = nil
+    end
+    
+    obj.screenWatcher = hs.screen.watcher.new(function()
+        if not obj.onlyMultiScreen then return end
+        
+        local screens = hs.screen.allScreens()
+        local screenCount = #screens
+        
+        if screenCount <= 1 then
+            -- Only one screen - disable window manager (if not already stopped from command)
+            if not obj.stoppedFromScreens then
+                print("WindowManager: Screen disconnected, only one screen remaining - disabling window manager")
+                obj.stoppedFromScreens = true
+                obj:updateStopState()
+            end
+        else
+            -- Multiple screens - enable window manager (if not stopped from command)
+            if obj.stoppedFromScreens then
+                -- Only enable if command hasn't also stopped us
+                if not obj.stoppedFromCommand then
+                    print("WindowManager: Multiple screens detected - enabling window manager")
+                    obj.stoppedFromScreens = false
+                    obj:updateStopState()
+                else
+                    -- Screens are back, but command still has us stopped
+                    obj.stoppedFromScreens = false
+                    -- Don't call updateStopState since command is still stopping us
+                end
+            end
+        end
+    end)
+    
+    obj.screenWatcher:start()
 end
 
 function obj:getTreeForSpace(space_id)
@@ -958,26 +1051,23 @@ end
 -- First press: Delete all trees, set stopWM to true
 -- Second press: Set stopWM to false and refresh tree
 function obj:toggleShutdownRestart()
-    if obj.stopWM then
-        -- Currently stopped, restart the system
-        obj.stopWM = false
-        obj._eventListenersActive = true
-        print("Window manager RESTARTED")
-        obj:refreshTrees()
-        obj:applyAllLayouts()
-        return true
+    if obj.stoppedFromCommand then
+        -- Currently stopped from command, restart the system (if screens allow)
+        obj.stoppedFromCommand = false
+        -- Check if screens want to stop us - if so, keep stopped
+        if obj.stoppedFromScreens then
+            print("Window manager restart prevented - only one screen detected")
+            return false
+        else
+            print("Window manager RESTARTED")
+            obj:updateStopState()
+            return true
+        end
     else
         -- Currently running, shutdown the system
-        obj.stopWM = true
-        obj._eventListenersActive = false
-        -- Delete only the tree for the currently focused space
-        local focused_space = hs.spaces.focusedSpace()
-        if focused_space and obj.trees[focused_space] then
-            obj.trees[focused_space] = nil
-            print("Window manager SHUTDOWN - tree for space " .. focused_space .. " deleted")
-        else
-            print("Window manager SHUTDOWN - no tree found for focused space")
-        end
+        obj.stoppedFromCommand = true
+        print("Window manager SHUTDOWN")
+        obj:updateStopState()
         return false
     end
 end

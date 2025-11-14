@@ -22,6 +22,7 @@ local watchers = dofile(base_path .. "watchers.lua")
 local tree_operations = dofile(base_path .. "tree_operations.lua")
 local window_operations = dofile(base_path .. "window_operations.lua")
 local layout_operations = dofile(base_path .. "layout_operations.lua")
+local menu_bar = dofile(base_path .. "menu_bar.lua")
 
 -- Store Node class in obj for access by other modules
 obj.Node = Node
@@ -90,6 +91,9 @@ function obj:start(persistLayout, onlyMultiScreen)
     -- ADD THIS LINE:
     obj:applyAllLayouts() -- Apply any changes found during reconciliation
     
+    -- Set up menu bar
+    menu_bar.setup(obj, helpers)
+    
     -- Initialize and start the sleep watcher (only if persistence is enabled)
     if persistLayout then
         obj.caffeinateWatcher = hs.caffeinate.watcher.new(function(event)
@@ -141,6 +145,12 @@ function obj:stop()
     if obj.caffeinateWatcher then
         obj.caffeinateWatcher:stop()
         obj.caffeinateWatcher = nil
+    end
+    
+    -- Remove menu bar item
+    if obj.menubar then
+        obj.menubar:delete()
+        obj.menubar = nil
     end
     
     return self
